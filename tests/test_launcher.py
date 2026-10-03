@@ -273,7 +273,20 @@ class Power(LauncherTestCase):
         self.assertEqual(self.state["boost"], "disabled")
 
 
-# Trimmed `modetest -c` / `-p` output from a docked Deck LCD on a 4K TV.
+# EDID of a Samsung 4K HDR TV, as `modetest -c` prints it.
+TV_EDID = [
+    "00ffffffffffff004c2db571000e0001", "011f0103806639780aa833ab5045a527",
+    "0d4848bdef80714f81c0810081809500", "a9c0b300d1c0e2d1008cf0705a806808",
+    "8a00501d7400001e565e00a0a0a02950", "30203500501d7400001a000000fd0018",
+    "4b0f873c000a202020202020000000fc", "0053414d53554e470a2020202020015e",
+    "02035cf05661661f041313132021225d", "5e5f6065666264646403122f09070709",
+    "070709070709070709070783010000e2", "004fe305c3016e030c001000903c2800",
+    "800102030468d85dc40178800900e306", "0d01e30f0300e5018b849001023a8018",
+    "71382d40582c450000000000001e0000", "00000000000000000000000000000037",
+]
+
+# Trimmed `modetest -c` / `-p` output from a docked Deck LCD on a 4K TV, with
+# Gamescope outputting HDR.
 MODETEST_CONNECTORS = """\
 Connectors:
 id\tencoder\tstatus\t\tname\t\tsize (mm)\tmodes\tencoders
@@ -292,6 +305,15 @@ id\tencoder\tstatus\t\tname\t\tsize (mm)\tmodes\tencoders
   #2 1920x1080 59.94 1920 2008 2052 2200 1080 1084 1089 1125 148352 flags: phsync, pvsync; type: driver
   props:
 \t1 EDID:
+\t\tflags: immutable blob
+\t\tblobs:
+
+\t\tvalue:
+""" + "".join(f"\t\t\t{row}\n" for row in TV_EDID) + """\
+\t148 Colorspace:
+\t\tflags: enum
+\t\tenums: Default=0 BT709_YCC=2 opRGB=7 BT2020_RGB=9 BT2020_YCC=10
+\t\tvalue: 9
 150\t0\tdisconnected\tHDMI-A-1       \t0x0\t\t0\t149
 """
 MODETEST_CRTCS = """\
@@ -312,6 +334,17 @@ class Display(LauncherTestCase):
         self.assertEqual(connectors["eDP-1"]["modes"], ["800x1280@60.00"])
         self.assertEqual(connectors["DP-1"]["modes"], ["3840x2160@60.00", "1920x1080@59.94"])
         self.assertFalse(connectors["HDMI-A-1"]["connected"])
+        self.assertTrue(connectors["DP-1"]["hdr_capable"])
+        self.assertTrue(connectors["DP-1"]["hdr"])
+        self.assertFalse(connectors["eDP-1"]["hdr_capable"])
+
+    def test_edid_without_hdr(self):
+        edid = bytes.fromhex("".join(TV_EDID))
+        # Drop the HDR static metadata block's PQ bit.
+        no_pq = edid.replace(bytes.fromhex("e3060d01"), bytes.fromhex("e3060901"))
+        self.assertTrue(self.l.edid_supports_hdr(edid))
+        self.assertFalse(self.l.edid_supports_hdr(no_pq))
+        self.assertFalse(self.l.edid_supports_hdr(edid[:128]))
 
     def test_active_mode(self):
         self.assertEqual(self.l.parse_modetest_active_modes(MODETEST_CRTCS), ["3840x2160@60.00"])
@@ -331,13 +364,17 @@ class Display(LauncherTestCase):
         self.assertEqual((info["connector"], info["external"], info["current"]), ("DP-1", True, "3840x2160@60.00"))
         pending = {}
         self.l.choose_display(pending)
-        self.assertEqual(pending["display"], {"connector": "DP-1", "mode": "3840x2160@60.00", "disable": ["eDP-1"]})
+        self.assertEqual(pending["display"],
+                         {"connector": "DP-1", "mode": "3840x2160@60.00", "hdr": True, "disable": ["eDP-1"]})
 
     def test_forced_mode_and_fallback(self):
         self.fake_modetest()
         pending = {"display_mode": "1920x1080@59.94"}
         self.l.choose_display(pending)
-        self.assertEqual(pending["display"]["mode"], "1920x1080@59.94")
+        self.assertEqual((pending["display"]["mode"], pending["display"]["hdr"]), ("1920x1080@59.94", False))
+        pending = {"display_mode": "1920x1080@59.94", "display_hdr": True}
+        self.l.choose_display(pending)
+        self.assertTrue(pending["display"]["hdr"])
         pending = {"display_mode": "2560x1440@144.00"}
         self.l.choose_display(pending)
         self.assertEqual(pending["display"]["mode"], "3840x2160@60.00")
@@ -362,6 +399,10 @@ class Display(LauncherTestCase):
         }
         display = {"connector": "DP-1", "mode": "3840x2160@60.00", "disable": ["eDP-1"]}
         self.assertEqual(self.l.display_changes(outputs, display), [])
+        outputs["DP-1"]["hdr"] = False
+        self.assertEqual(self.l.display_changes(outputs, dict(display, hdr=True)),
+                         ["output.DP-1.hdr.enable", "output.DP-1.wcg.enable"])
+        self.assertEqual(self.l.display_changes(outputs, dict(display, hdr=False)), [])
         display["mode"] = "1920x1080@60.00"
         self.assertEqual(self.l.display_changes(outputs, display), ["output.DP-1.mode.18"])
         outputs["eDP-1"]["enabled"] = True

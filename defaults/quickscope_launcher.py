@@ -729,19 +729,58 @@ def parse_mode_name(name):
     return (int(m.group(1)), int(m.group(2)), float(m.group(3))) if m else None
 
 
+def edid_supports_hdr(edid):
+    """Whether an EDID's CTA-861 extension has an HDR static metadata block
+    listing the PQ (SMPTE ST 2084) transfer function."""
+    for start in range(128, len(edid) - 127, 128):
+        block = edid[start:start + 128]
+        if block[0] != 0x02:
+            continue
+        i, end = 4, min(block[2], 127)
+        while i < end:
+            tag, length = block[i] >> 5, block[i] & 0x1F
+            # Extended tag 6: HDR static metadata; first payload byte lists EOTFs.
+            if tag == 7 and length >= 2 and block[i + 1] == 0x06 and block[i + 2] & 0x04:
+                return True
+            i += 1 + length
+    return False
+
+
 def parse_modetest_connectors(text):
-    """{connector: {"connected": bool, "modes": [mode name, ...]}} from `modetest -c`."""
+    """{connector: {"connected", "modes": [mode name, ...], "hdr_capable",
+    "hdr" (scanning out in BT.2020)}} from `modetest -c`."""
     connectors, current = {}, None
+    in_props, prop, edid, enums = False, None, None, ""
     for line in text.splitlines():
         m = MODETEST_CONNECTOR.match(line)
         if m:
-            current = {"connected": m.group(1) == "connected", "modes": []}
+            current = {"connected": m.group(1) == "connected", "modes": [], "hdr_capable": False, "hdr": False}
             connectors[m.group(2)] = current
+            in_props = False
             continue
-        if line.strip().startswith("props:"):
-            current = None
+        if current is None:
+            continue
+        stripped = line.strip()
+        if stripped.startswith("props:"):
+            in_props = True
+            continue
+        if in_props:
+            m = re.match(r"^\d+\s+(.+):$", stripped)
+            if m:
+                prop, edid = m.group(1), None
+            elif prop == "EDID" and stripped == "value:":
+                edid = bytearray()
+            elif prop == "EDID" and edid is not None and re.fullmatch(r"[0-9a-f]+", stripped):
+                edid += bytes.fromhex(stripped)
+                current["hdr_capable"] = edid_supports_hdr(edid)
+            elif prop == "Colorspace" and stripped.startswith("enums:"):
+                enums = stripped
+            elif prop == "Colorspace" and stripped.startswith("value:"):
+                value = stripped.split(":", 1)[1].strip()
+                current["hdr"] = re.search(rf"\bBT2020_\w+={value}\b", enums) is not None
+            continue
         m = MODETEST_MODE.match(line)
-        if current is not None and m:
+        if m:
             width, height, refresh = int(m.group(1)), int(m.group(2)), m.group(3)
             # Skip tiny fallback modes such as the LCD's 256x160.
             name = mode_name(width, height, refresh)
@@ -797,6 +836,8 @@ def display_info():
         "others": [n for n in connectors if n != target],
         "modes": modes,
         "current": current,
+        "hdr_capable": connectors[target]["hdr_capable"],
+        "hdr": connectors[target]["hdr"],
     }
 
 
@@ -807,20 +848,21 @@ def choose_display(pending):
         return
     forced = pending.get("display_mode")
     if forced and forced in info["modes"]:
-        mode = forced
+        mode, hdr = forced, bool(pending.get("display_hdr"))
     else:
         if forced:
             log(f"{forced} isn't offered by {info['connector']}, matching Gaming Mode")
-        mode = info["current"]
+        mode, hdr = info["current"], info["hdr"]
+    hdr = hdr and info["hdr_capable"]
     # External displays always get Gaming Mode's layout (external only). The
-    # internal panel only needs anything when its mode isn't KWin's default,
-    # the panel's preferred mode (listed first).
-    if not info["external"] and mode in (None, info["modes"][0]):
+    # internal panel only needs anything when it differs from KWin's default:
+    # the panel's preferred mode (listed first), in SDR.
+    if not info["external"] and mode in (None, info["modes"][0]) and not hdr:
         return
-    pending["display"] = {"connector": info["connector"], "mode": mode,
+    pending["display"] = {"connector": info["connector"], "mode": mode, "hdr": hdr,
                           "disable": info["others"] if info["external"] else []}
     write_json(PENDING, pending)
-    log(f"display: {info['connector']} at {mode or 'its default mode'}, "
+    log(f"display: {info['connector']} at {mode or 'its default mode'}, HDR {'on' if hdr else 'off'}, "
         f"off: {pending['display']['disable'] or 'nothing'}")
 
 
@@ -838,6 +880,7 @@ def kscreen_outputs():
         o.get("name"): {
             "enabled": bool(o.get("enabled")),
             "mode": str(o.get("currentModeId")),
+            "hdr": o.get("hdr"),
             "modes": {mode_name(m["size"]["width"], m["size"]["height"], m["refreshRate"]): str(m["id"])
                       for m in o.get("modes", [])},
         }
@@ -860,6 +903,11 @@ def display_changes(outputs, display):
             log(f"KWin doesn't offer {display['mode']} on {display['connector']}")
         elif mode_id != target.get("mode"):
             args.append(f"output.{display['connector']}.mode.{mode_id}")
+    # KWin's HDR uses BT.2020, so wide colour gamut goes with it.
+    hdr = display.get("hdr")
+    if hdr is not None and target.get("hdr") != hdr:
+        state = "enable" if hdr else "disable"
+        args += [f"output.{display['connector']}.hdr.{state}", f"output.{display['connector']}.wcg.{state}"]
     return args
 
 

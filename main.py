@@ -24,6 +24,9 @@ SETTINGS_DEFAULTS = {
     # "" matches Gaming Mode's display mode; otherwise a mode like
     # "1920x1080@60.00", used when the display offers it.
     "display_mode": "",
+    # HDR with a forced display mode, on displays that support it. Matching
+    # Gaming Mode follows Gamescope's HDR state instead.
+    "display_hdr": False,
     "favorites": [],
     # Per-shortcut overrides, {"<appid>": "direct"}. Shortcuts default to
     # "hybrid" (launched directly, desktop Steam started alongside for its
@@ -328,6 +331,7 @@ class Plugin:
                 "match_gaming_brightness": s["match_gaming_brightness"],
                 "brightness_pct": s["brightness_pct"],
                 "display_mode": s["display_mode"],
+                "display_hdr": s["display_hdr"],
             }
 
             path = _paths()["pending"]

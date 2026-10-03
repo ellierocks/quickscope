@@ -262,8 +262,8 @@ function Content() {
               label="Match Gaming Mode"
               description={
                 display.external
-                  ? "Use the resolution and refresh rate Gaming Mode uses on this display. The Deck's screen stays off, as in Gaming Mode."
-                  : "Use the refresh rate Gaming Mode uses."
+                  ? "Use the resolution, refresh rate and HDR setting Gaming Mode uses on this display. The Deck's screen stays off, as in Gaming Mode."
+                  : "Use the refresh rate and HDR setting Gaming Mode uses."
               }
               checked={!settings.display_mode}
               onChange={(v) =>
@@ -283,6 +283,15 @@ function Content() {
                 rgOptions={sortModes(display.modes).map((m) => ({ data: m, label: modeLabel(m) }))}
                 selectedOption={settings.display_mode}
                 onChange={(o) => update("display_mode", o.data)}
+              />
+            </PanelSectionRow>
+          )}
+          {!!settings.display_mode && display.hdr_capable && (
+            <PanelSectionRow>
+              <ToggleField
+                label="HDR"
+                checked={settings.display_hdr}
+                onChange={(v) => update("display_hdr", v)}
               />
             </PanelSectionRow>
           )}

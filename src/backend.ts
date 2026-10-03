@@ -9,6 +9,8 @@ export interface Settings {
   brightness_pct: number;
   /** "" matches Gaming Mode; otherwise e.g. "1920x1080@60.00". */
   display_mode: string;
+  /** HDR with a forced display mode. */
+  display_hdr: boolean;
   favorites: number[];
   launch_modes: Record<string, ShortcutMode>;
 }
@@ -33,6 +35,10 @@ export interface DisplayInfo {
   modes: string[];
   /** Gamescope's current mode, if it's one of the display's own. */
   current: string | null;
+  /** The display's EDID advertises HDR (PQ). */
+  hdr_capable: boolean;
+  /** Gamescope is outputting HDR. */
+  hdr: boolean;
 }
 
 export interface LaunchSpec {
