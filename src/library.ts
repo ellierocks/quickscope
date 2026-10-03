@@ -19,7 +19,8 @@ export interface ShortcutDetails {
 
 const w = window as any;
 
-function toLibraryApp(o: any): LibraryApp | null {
+/** A library app from a Steam app overview, or null if it isn't a game, app or shortcut. */
+export function toLibraryApp(o: any): LibraryApp | null {
   if (!o || typeof o.appid !== "number") return null;
   const isShortcut = o.app_type === SHORTCUT_APP_TYPE;
   if (!isShortcut && !STEAM_APP_TYPES.has(o.app_type)) return null;
@@ -29,6 +30,11 @@ function toLibraryApp(o: any): LibraryApp | null {
     kind: isShortcut ? "shortcut" : "steam",
     lastPlayed: o.rt_last_time_played ?? 0,
   };
+}
+
+/** Whether Quickscope can launch this overview: any shortcut, or an installed Steam game. */
+export function isLaunchable(o: any): boolean {
+  return o?.app_type === SHORTCUT_APP_TYPE || !!(o?.local_per_client_data?.installed ?? o?.installed);
 }
 
 /** Installed Steam games plus all non-Steam shortcuts, most recently played first. */
