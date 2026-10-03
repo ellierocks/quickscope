@@ -12,7 +12,7 @@ Quickscope hands the screen to a single app in a stripped-down Plasma Wayland se
 
 ## Why
 
-Moonlight's own statistics, streaming *Batman: Arkham Knight* to a Steam Deck LCD with identical Moonlight settings (V-Sync on):
+Moonlight's own statistics, streaming *Batman: Arkham Knight* from [Vibeshine](https://github.com/Nonary/vibeshine) (Nonary's fork of Sunshine) to a Steam Deck LCD, with identical Moonlight settings (V-Sync on):
 
 | Codec | Gaming Mode (Gamescope) | Quickscope | Difference |
 |---|---:|---:|---:|
