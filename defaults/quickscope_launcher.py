@@ -853,16 +853,18 @@ def choose_display(pending):
         if forced:
             log(f"{forced} isn't offered by {info['connector']}, matching Gaming Mode")
         mode, hdr = info["current"], info["hdr"]
-    hdr = hdr and info["hdr_capable"]
-    # External displays always get Gaming Mode's layout (external only). The
-    # internal panel only needs anything when it differs from KWin's default:
-    # the panel's preferred mode (listed first), in SDR.
-    if not info["external"] and mode in (None, info["modes"][0]) and not hdr:
-        return
-    pending["display"] = {"connector": info["connector"], "mode": mode, "hdr": hdr,
+    # Leave HDR alone on displays without it.
+    hdr = bool(hdr) if info["hdr_capable"] else None
+    # The internal panel starts in its preferred mode (listed first) anyway.
+    if not info["external"] and mode == info["modes"][0]:
+        mode = None
+    scale = max(100, min(300, int(pending.get("display_scale", 100)))) / 100
+    # External displays always get Gaming Mode's layout (external only).
+    pending["display"] = {"connector": info["connector"], "mode": mode, "hdr": hdr, "scale": scale,
                           "disable": info["others"] if info["external"] else []}
     write_json(PENDING, pending)
-    log(f"display: {info['connector']} at {mode or 'its default mode'}, HDR {'on' if hdr else 'off'}, "
+    log(f"display: {info['connector']} at {mode or 'its default mode'}, scale {scale:g}, "
+        f"HDR {'unsupported' if hdr is None else 'on' if hdr else 'off'}, "
         f"off: {pending['display']['disable'] or 'nothing'}")
 
 
@@ -881,6 +883,7 @@ def kscreen_outputs():
             "enabled": bool(o.get("enabled")),
             "mode": str(o.get("currentModeId")),
             "hdr": o.get("hdr"),
+            "scale": o.get("scale"),
             "modes": {mode_name(m["size"]["width"], m["size"]["height"], m["refreshRate"]): str(m["id"])
                       for m in o.get("modes", [])},
         }
@@ -908,6 +911,10 @@ def display_changes(outputs, display):
     if hdr is not None and target.get("hdr") != hdr:
         state = "enable" if hdr else "disable"
         args += [f"output.{display['connector']}.hdr.{state}", f"output.{display['connector']}.wcg.{state}"]
+    # Scaling doesn't change the display mode, so it never makes a TV re-sync.
+    scale = display.get("scale")
+    if scale and abs((target.get("scale") or 0) - scale) > 0.001:
+        args.append(f"output.{display['connector']}.scale.{scale:g}")
     return args
 
 

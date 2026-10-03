@@ -75,7 +75,8 @@ Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quicksc
 | Power profile: Automatic (Battery saver on battery, High performance when plugged in), High performance, or Battery saver (about 40% less chip power while streaming) | Automatic |
 | Starting brightness | Matches Gaming Mode; or a fixed level |
 | Lock brightness (stops KDE's power management changing it) | On |
-| Display mode (on an external display, or a built-in panel with several modes): match Gaming Mode, or pick one of the display's own modes | Match Gaming Mode |
+| Display mode and HDR (on an external display, or a built-in panel with several modes or HDR): match Gaming Mode, or pick one of the display's own modes | Match Gaming Mode |
+| Scale (size of the app's menus and text) | 100% |
 
 There's no Quick Access menu outside Gaming Mode, so Quickscope adds its own controls:
 

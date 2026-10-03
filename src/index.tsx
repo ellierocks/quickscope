@@ -255,22 +255,25 @@ function Content() {
         </PanelSectionRow>
       </PanelSection>
 
-      {display && (display.external || display.modes.length > 1) && (
+      {display && (
         <PanelSection title={display.external ? "External display" : "Display"}>
-          <PanelSectionRow>
-            <ToggleField
-              label="Match Gaming Mode"
-              description={
-                display.external
-                  ? "Use the resolution, refresh rate and HDR setting Gaming Mode uses on this display. The Deck's screen stays off, as in Gaming Mode."
-                  : "Use the refresh rate and HDR setting Gaming Mode uses."
-              }
-              checked={!settings.display_mode}
-              onChange={(v) =>
-                update("display_mode", v ? "" : display.current ?? display.modes[0])
-              }
-            />
-          </PanelSectionRow>
+          {/* A single-mode SDR panel like the Deck LCD has nothing to choose. */}
+          {(display.external || display.modes.length > 1 || display.hdr_capable) && (
+            <PanelSectionRow>
+              <ToggleField
+                label="Match Gaming Mode"
+                description={
+                  display.external
+                    ? "Use the resolution, refresh rate and HDR setting Gaming Mode uses on this display. The Deck's screen stays off, as in Gaming Mode."
+                    : "Use the refresh rate and HDR setting Gaming Mode uses."
+                }
+                checked={!settings.display_mode}
+                onChange={(v) =>
+                  update("display_mode", v ? "" : display.current ?? display.modes[0])
+                }
+              />
+            </PanelSectionRow>
+          )}
           {!!settings.display_mode && (
             <PanelSectionRow>
               <DropdownItem
@@ -295,6 +298,19 @@ function Content() {
               />
             </PanelSectionRow>
           )}
+          <PanelSectionRow>
+            <SliderField
+              label="Scale"
+              description="Size of the app's menus and text. Moonlight streams stay at full resolution either way."
+              value={settings.display_scale}
+              min={100}
+              max={300}
+              step={25}
+              showValue
+              valueSuffix="%"
+              onChange={(v) => update("display_scale", v)}
+            />
+          </PanelSectionRow>
         </PanelSection>
       )}
 

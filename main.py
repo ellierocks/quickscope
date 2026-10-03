@@ -27,6 +27,8 @@ SETTINGS_DEFAULTS = {
     # HDR with a forced display mode, on displays that support it. Matching
     # Gaming Mode follows Gamescope's HDR state instead.
     "display_hdr": False,
+    # Percent; KDE would otherwise pick its own (170% on a 4K TV).
+    "display_scale": 100,
     "favorites": [],
     # Per-shortcut overrides, {"<appid>": "direct"}. Shortcuts default to
     # "hybrid" (launched directly, desktop Steam started alongside for its
@@ -258,6 +260,8 @@ class Plugin:
             raise ValueError(f"Unknown setting: {key}")
         if key == "brightness_pct":
             value = max(5, min(100, int(value)))
+        elif key == "display_scale":
+            value = max(100, min(300, int(value)))
         elif key == "favorites":
             value = [int(v) for v in value]
         elif key == "launch_modes":
@@ -332,6 +336,7 @@ class Plugin:
                 "brightness_pct": s["brightness_pct"],
                 "display_mode": s["display_mode"],
                 "display_hdr": s["display_hdr"],
+                "display_scale": s["display_scale"],
             }
 
             path = _paths()["pending"]

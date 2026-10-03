@@ -364,8 +364,8 @@ class Display(LauncherTestCase):
         self.assertEqual((info["connector"], info["external"], info["current"]), ("DP-1", True, "3840x2160@60.00"))
         pending = {}
         self.l.choose_display(pending)
-        self.assertEqual(pending["display"],
-                         {"connector": "DP-1", "mode": "3840x2160@60.00", "hdr": True, "disable": ["eDP-1"]})
+        self.assertEqual(pending["display"], {"connector": "DP-1", "mode": "3840x2160@60.00", "hdr": True,
+                                              "scale": 1.0, "disable": ["eDP-1"]})
 
     def test_forced_mode_and_fallback(self):
         self.fake_modetest()
@@ -379,12 +379,13 @@ class Display(LauncherTestCase):
         self.l.choose_display(pending)
         self.assertEqual(pending["display"]["mode"], "3840x2160@60.00")
 
-    def test_handheld_lcd_needs_nothing(self):
+    def test_handheld_lcd_only_gets_a_scale(self):
         lcd_only = MODETEST_CONNECTORS.split("145\t144")[0]
         self.fake_modetest(lcd_only, MODETEST_CRTCS.replace("3840x2160 60.00", "800x1280 60.00"))
-        pending = {}
+        pending = {"display_scale": 150}
         self.l.choose_display(pending)
-        self.assertNotIn("display", pending)
+        self.assertEqual(pending["display"], {"connector": "eDP-1", "mode": None, "hdr": None,
+                                              "scale": 1.5, "disable": []})
 
     def test_closest_kscreen_mode(self):
         ids = {"3840x2160@60.00": "1", "3840x2160@59.94": "2", "1920x1080@60.00": "3"}
@@ -403,6 +404,9 @@ class Display(LauncherTestCase):
         self.assertEqual(self.l.display_changes(outputs, dict(display, hdr=True)),
                          ["output.DP-1.hdr.enable", "output.DP-1.wcg.enable"])
         self.assertEqual(self.l.display_changes(outputs, dict(display, hdr=False)), [])
+        outputs["DP-1"]["scale"] = 1.7
+        self.assertEqual(self.l.display_changes(outputs, dict(display, scale=1.0)), ["output.DP-1.scale.1"])
+        self.assertEqual(self.l.display_changes(outputs, dict(display, scale=1.7)), [])
         display["mode"] = "1920x1080@60.00"
         self.assertEqual(self.l.display_changes(outputs, display), ["output.DP-1.mode.18"])
         outputs["eDP-1"]["enabled"] = True

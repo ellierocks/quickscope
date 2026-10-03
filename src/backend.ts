@@ -11,6 +11,8 @@ export interface Settings {
   display_mode: string;
   /** HDR with a forced display mode. */
   display_hdr: boolean;
+  /** Percent, 100-300. */
+  display_scale: number;
   favorites: number[];
   launch_modes: Record<string, ShortcutMode>;
 }
