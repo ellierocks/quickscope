@@ -19,6 +19,8 @@ export interface Settings {
   /** Keyed by display id, e.g. "SAM-71B5". */
   moonlight_profiles: Record<string, MoonlightProfile>;
   favorites: number[];
+  /** Pinned direct-to-stream entries, app names exactly as the host gives them. */
+  pinned_streams: { host: string; app: string }[];
   launch_modes: Record<string, ShortcutMode>;
 }
 

@@ -38,6 +38,8 @@ SETTINGS_DEFAULTS = {
     "moonlight_override": False,
     "moonlight_profiles": {},
     "favorites": [],
+    # Pinned direct-to-stream entries: [{"host": name, "app": exact app name}].
+    "pinned_streams": [],
     # Per-shortcut overrides, {"<appid>": "direct"}. Shortcuts default to
     # "hybrid" (launched directly, desktop Steam started alongside for its
     # desktop controller layout); Steam games always launch through Steam.
@@ -350,6 +352,8 @@ class Plugin:
             }
         elif key == "favorites":
             value = [int(v) for v in value]
+        elif key == "pinned_streams":
+            value = [{"host": str(p["host"]), "app": str(p["app"])} for p in value if p.get("host") and p.get("app")]
         elif key == "launch_modes":
             value = {str(int(k)): v for k, v in value.items() if v in LAUNCH_MODES}
         elif key == "power_profile" and value not in POWER_PROFILES:

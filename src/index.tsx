@@ -118,6 +118,48 @@ function AppRow({
   );
 }
 
+/** A direct-to-stream entry: a host app, launched straight into the stream. */
+function StreamRow({
+  host,
+  app,
+  pinned,
+  label,
+  disabled,
+  onLaunch,
+  onTogglePin,
+}: {
+  host: MoonlightHost;
+  app: MoonlightApp;
+  pinned: boolean;
+  /** Shown on the right, e.g. the host's name in the Pinned section. */
+  label?: string;
+  disabled: boolean;
+  onLaunch: (host: MoonlightHost, app: MoonlightApp) => void;
+  onTogglePin: (host: MoonlightHost, app: MoonlightApp) => void;
+}) {
+  return (
+    <PanelSectionRow>
+      <DialogButton
+        disabled={disabled}
+        onClick={() => onLaunch(host, app)}
+        onSecondaryButton={() => onTogglePin(host, app)}
+        onSecondaryActionDescription={pinned ? "Unpin" : "Pin"}
+        style={{ padding: "8px 12px", minWidth: 0, borderRadius: 0 }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <span
+            style={{ flex: 1, textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          >
+            {pinned ? "★ " : ""}
+            {app.name.trim()}
+          </span>
+          {label && <span style={{ fontSize: "0.7em", opacity: 0.6, whiteSpace: "nowrap" }}>{label}</span>}
+        </div>
+      </DialogButton>
+    </PanelSectionRow>
+  );
+}
+
 function Content() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [env, setEnv] = useState<Environment | null>(null);
@@ -184,6 +226,26 @@ function Content() {
     }
   };
 
+  const isPinnedStream = (host: MoonlightHost, app: MoonlightApp) =>
+    settings.pinned_streams.some((p) => p.host === host.name && p.app === app.name);
+
+  const onToggleStreamPin = (host: MoonlightHost, app: MoonlightApp) => {
+    const pins = settings.pinned_streams;
+    update(
+      "pinned_streams",
+      isPinnedStream(host, app)
+        ? pins.filter((p) => !(p.host === host.name && p.app === app.name))
+        : [...pins, { host: host.name, app: app.name }],
+    );
+  };
+
+  // Pinned streams that the host still offers, in pin order.
+  const pinnedStreams = settings.pinned_streams.flatMap((p) => {
+    const host = hosts.find((h) => h.name === p.host);
+    const app = host?.apps.find((a) => a.name === p.app);
+    return host && app ? [{ host, app }] : [];
+  });
+
   const onTogglePin = (app: LibraryApp) => {
     const favs = settings.favorites;
     update("favorites", favs.includes(app.appid) ? favs.filter((id) => id !== app.appid) : [...favs, app.appid]);
@@ -245,6 +307,24 @@ function Content() {
         </PanelSection>
       )}
 
+      {(pinnedStreams.length > 0 || pinned.length > 0) && (
+        <PanelSection title="Pinned">
+          {pinnedStreams.map(({ host, app }) => (
+            <StreamRow
+              key={`${host.name}-${app.name}`}
+              host={host}
+              app={app}
+              pinned
+              label={hosts.length > 1 ? host.name : undefined}
+              disabled={busy}
+              onLaunch={onStream}
+              onTogglePin={onToggleStreamPin}
+            />
+          ))}
+          {pinned.map(row)}
+        </PanelSection>
+      )}
+
       <PanelSection title="Moonlight">
         {moonlight.map(row)}
         {moonlight.length === 0 && (
@@ -262,20 +342,18 @@ function Content() {
         .map((host) => (
           <PanelSection key={host.uuid || host.name} title={`Stream from ${host.name}`}>
             {host.apps.map((app) => (
-              <PanelSectionRow key={`${app.id}-${app.name}`}>
-                <DialogButton
-                  disabled={busy}
-                  onClick={() => onStream(host, app)}
-                  style={{ padding: "8px 12px", minWidth: 0, borderRadius: 0, textAlign: "left" }}
-                >
-                  {app.name.trim()}
-                </DialogButton>
-              </PanelSectionRow>
+              <StreamRow
+                key={`${app.id}-${app.name}`}
+                host={host}
+                app={app}
+                pinned={isPinnedStream(host, app)}
+                disabled={busy}
+                onLaunch={onStream}
+                onTogglePin={onToggleStreamPin}
+              />
             ))}
           </PanelSection>
         ))}
-
-      {pinned.length > 0 && <PanelSection title="Pinned">{pinned.map(row)}</PanelSection>}
 
       <PanelSection title="Other apps">
         <PanelSectionRow>

@@ -104,6 +104,14 @@ class PrepareLaunch(unittest.TestCase):
         self.assertEqual(pending["command"], "flatpak run com.moonlight_stream.Moonlight stream star '  Resume'")
         self.assertEqual(pending["stream"], {"host": "star", "app": "  Resume"})
 
+    def test_pinned_streams_keep_exact_names(self):
+        asyncio.run(
+            self.plugin.set_setting(
+                "pinned_streams", [{"host": "star", "app": "  Resume"}, {"host": "", "app": "x"}, {"app": "y"}]
+            )
+        )
+        self.assertEqual(self.plugin.settings["pinned_streams"], [{"host": "star", "app": "  Resume"}])
+
     def test_unknown_launch_modes_are_dropped(self):
         asyncio.run(self.plugin.set_setting("launch_modes", {"1": "direct", "2": "steam", "3": "bogus"}))
         self.assertEqual(self.plugin.settings["launch_modes"], {"1": "direct"})
