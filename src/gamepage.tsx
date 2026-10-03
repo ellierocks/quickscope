@@ -1,21 +1,14 @@
-// Adds a "Quickscope" button next to Play on a game's library page.
+// Adds a "Quickscope" button to a game's library page, in the bottom-right
+// corner of the header art, just above the Play row.
 //
-// Steam builds the Play row several components deep (page > ... > play
-// section > ... > ActionRow), and those components have no public names. Every
-// component on the way down carries the app overview plus `setSections` (or
-// `onGameInfoButtonToggle` at the top), so rather than hard-coding the chain we
-// follow components with those props until one renders the ActionRow, then
-// insert the button after Play. If Steam's layout changes and the row can't be
-// found, nothing is added and the page renders as normal.
+// It can't go inside the Play row itself: that row is rendered under a MobX
+// observer class whose render is non-writable after its first call, so any
+// patch below it is lost on the next re-render. The page component above it is
+// a plain memo component and can be patched reliably, the same level other
+// Decky plugins (e.g. ProtonDB badges) use. Every step is guarded: if Steam's
+// layout changes, the button is simply not added.
 import { routerHook } from "@decky/api";
-import {
-  DialogButton,
-  afterPatch,
-  basicAppDetailsSectionStylerClasses,
-  findInReactTree,
-  wrapReactClass,
-  wrapReactType,
-} from "@decky/ui";
+import { DialogButton, afterPatch, appDetailsClasses, findInReactTree, wrapReactType } from "@decky/ui";
 import { useState } from "react";
 import { FaCrosshairs } from "react-icons/fa";
 
@@ -23,11 +16,7 @@ import { launch, toast } from "./launch";
 import { isLaunchable, toLibraryApp } from "./library";
 
 const ROUTE = "/library/app/:appid";
-// The Play row is 5 levels below the page today; leave room for Steam adding a few.
-const MAX_DEPTH = 10;
 const BUTTON_KEY = "quickscope-launch";
-
-type Handler = (args: any[], ret: any) => any;
 
 function QuickscopeButton({ overview }: { overview: any }) {
   const [busy, setBusy] = useState(false);
@@ -43,114 +32,81 @@ function QuickscopeButton({ overview }: { overview: any }) {
       setBusy(false);
     }
   };
+  // Zero-height wrapper so the page layout doesn't move; the button floats
+  // over the bottom edge of the header art, aligned with the Play row's right edge.
   return (
-    <DialogButton
-      key={BUTTON_KEY}
-      disabled={busy}
-      onClick={onClick}
-      style={{
-        width: "auto",
-        minWidth: 0,
-        height: "48px",
-        marginLeft: "12px",
-        padding: "0 20px",
-        display: "flex",
-        alignItems: "center",
-        gap: "10px",
-        flexShrink: 0,
-      }}
-    >
-      <FaCrosshairs />
-      Quickscope
-    </DialogButton>
+    <div style={{ position: "relative", height: 0, zIndex: 10 }}>
+      <DialogButton
+        disabled={busy}
+        onClick={onClick}
+        style={{
+          position: "absolute",
+          right: "36px",
+          bottom: "12px",
+          width: "auto",
+          minWidth: 0,
+          height: "40px",
+          padding: "0 16px",
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          background: "rgba(14, 20, 27, 0.75)",
+          backdropFilter: "blur(8px)",
+        }}
+      >
+        <FaCrosshairs />
+        Quickscope
+      </DialogButton>
+    </div>
   );
 }
 
-function isChainNode(node: any): boolean {
-  const props = node?.props;
-  return (
-    !!props?.overview &&
-    (props.setSections !== undefined || props.onGameInfoButtonToggle !== undefined) &&
-    !!node.type &&
-    typeof node.type !== "string"
+function injectButton(pageTree: any, overview: any) {
+  if (!overview || !isLaunchable(overview)) return;
+  const innerClass = appDetailsClasses?.InnerContainer;
+  if (!innerClass) return;
+  const inner = findInReactTree(
+    pageTree,
+    (x: any) => Array.isArray(x?.props?.children) && typeof x?.props?.className === "string" && x.props.className.includes(innerClass),
   );
-}
-
-function chainChildren(tree: any): any[] {
-  const found: any[] = [];
-  const walk = (node: any, depth: number) => {
-    if (!node || depth > 50) return;
-    if (Array.isArray(node)) return node.forEach((child) => walk(child, depth + 1));
-    if (typeof node !== "object") return;
-    if (isChainNode(node)) found.push(node);
-    if (node.props?.children) walk(node.props.children, depth + 1);
-  };
-  walk(tree, 0);
-  return found;
-}
-
-/** Insert the button after Play in a rendered ActionRow. Returns whether the row was found. */
-function injectIntoRow(tree: any, overview: any): boolean {
-  const rowClass = basicAppDetailsSectionStylerClasses?.ActionRow;
-  if (!rowClass) return false;
-  const row = findInReactTree(tree, (x: any) => typeof x?.props?.className === "string" && x.props.className.includes(rowClass));
-  if (!row) return false;
-  const children: any[] = Array.isArray(row.props.children) ? [...row.props.children] : [row.props.children];
-  if (!isLaunchable(overview) || children.some((c) => c?.key === BUTTON_KEY)) return true;
-  const playIndex = children.findIndex((c) => findInReactTree(c, (x: any) => x?.props?.bShowStreamingSelector !== undefined));
-  children.splice(playIndex + 1, 0, <QuickscopeButton key={BUTTON_KEY} overview={overview} />);
-  row.props.children = children;
-  return true;
-}
-
-/** Patch a component node so `handler` sees its render output (same approach as @decky/ui's createReactTreePatcher). */
-function patchComponent(node: any, prop: string, handler: Handler) {
-  const type = node[prop];
-  if (typeof type === "function" && !type.prototype?.render) {
-    afterPatch(node, prop, handler);
-  } else if (type?.prototype?.render) {
-    wrapReactClass(node, prop);
-    afterPatch(node[prop].prototype, "render", handler);
-  } else if (typeof type === "object" && type) {
-    wrapReactType(node, prop);
-    patchComponent(node[prop], node[prop].render ? "render" : "type", handler);
-  }
-}
-
-// Patched component types, per depth: original type -> patched copy.
-const caches: Map<any, any>[] = [];
-
-function follow(node: any, depth: number) {
-  const cache = (caches[depth] ??= new Map());
-  const patched = cache.get(node.type);
-  if (patched) {
-    node.type = patched;
-    return;
-  }
-  const original = node.type;
-  patchComponent(node, "type", (args, ret) => {
-    const overview = args?.[0]?.overview;
-    if (!overview || injectIntoRow(ret, overview)) return ret;
-    if (depth < MAX_DEPTH) chainChildren(ret).forEach((child) => follow(child, depth + 1));
-    return ret;
-  });
-  cache.set(original, node.type);
+  const children: any[] | undefined = inner?.props?.children;
+  if (!children || children.some((c) => c?.key === BUTTON_KEY)) return;
+  // Right after the header: the first child that isn't the overview panel.
+  children.splice(1, 0, <QuickscopeButton key={BUTTON_KEY} overview={overview} />);
 }
 
 /** Add the game page patch. Returns a function that removes it. */
 export function patchGamePage(): () => void {
+  let patchedPageType: any = null;
   const patch = routerHook.addPatch(ROUTE, (tree: any) => {
-    const routeProps = findInReactTree(tree, (x: any) => x?.renderFunc);
-    if (routeProps) {
+    try {
+      const routeProps = findInReactTree(tree, (x: any) => x?.renderFunc);
+      if (!routeProps) return tree;
       afterPatch(routeProps, "renderFunc", (_: any[], ret: any) => {
         try {
           const page = findInReactTree(ret, (x: any) => x?.props?.overview && x?.props?.details);
-          if (page?.type) follow(page, 0);
+          if (!page?.type) return ret;
+          if (patchedPageType) {
+            page.type = patchedPageType;
+            return ret;
+          }
+          wrapReactType(page);
+          afterPatch(page.type, "type", (args: any[], pageTree: any) => {
+            try {
+              injectButton(pageTree, args?.[0]?.overview);
+            } catch (e) {
+              console.error("Quickscope: game page button failed", e);
+            }
+            return pageTree;
+          });
+          patchedPageType = page.type;
         } catch (e) {
           console.error("Quickscope: game page patch failed", e);
         }
         return ret;
       });
+    } catch (e) {
+      console.error("Quickscope: game page route patch failed", e);
     }
     return tree;
   });

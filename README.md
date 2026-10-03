@@ -12,7 +12,7 @@ Quickscope hands the screen to a single app in a stripped-down desktop session (
 
 ## Features
 
-- **One button press** from the Quick Access menu, with pinned and recent apps and search
+- **One button press** from the Quick Access menu (pinned and recent apps, search) or from a game's library page
 - **Fast startup:** the app launches the moment the compositor is up, with a loading screen instead of a black screen
 - **Your controller layout** keeps working through Steam's desktop layout
 - **A quiet session:** no Plasma panel, splash screen or KDE background helpers, and GPU/CPU kept at full speed
@@ -28,7 +28,7 @@ Quickscope hands the screen to a single app in a stripped-down desktop session (
 
 ## Usage
 
-Open **Quickscope** from the Quick Access menu (**⋯**).
+Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quickscope** button on a game's library page (bottom-right of the header art, above the Play row). Play itself still launches in Gaming Mode as usual.
 
 | Button | |
 |:---:|---|
