@@ -4,6 +4,8 @@ export interface Settings {
   return_to_gaming: boolean;
   force_fullscreen: boolean;
   power_profile: PowerProfile;
+  wifi_powersave_off: boolean;
+  wifi_lock_ap: boolean;
   lock_brightness: boolean;
   match_gaming_brightness: boolean;
   brightness_pct: number;

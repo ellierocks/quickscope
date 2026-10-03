@@ -16,6 +16,10 @@ SETTINGS_DEFAULTS = {
     # auto, powersave governor, CPU boost off (about 40% less APU power).
     # "auto": battery on battery, performance when plugged in.
     "power_profile": "auto",
+    # Session-only, restored afterwards: Wi-Fi power saving off, and the Wi-Fi
+    # connection locked to its current access point (no roaming or scans).
+    "wifi_powersave_off": True,
+    "wifi_lock_ap": True,
     # Hold the screen at one brightness for the session (there's no Quick
     # Access menu to change it): Gaming Mode's level, or brightness_pct.
     "lock_brightness": True,
@@ -381,6 +385,8 @@ class Plugin:
                 "return_to_gaming": s["return_to_gaming"],
                 "force_fullscreen": s["force_fullscreen"],
                 "power_profile": s["power_profile"],
+                "wifi_powersave_off": s["wifi_powersave_off"],
+                "wifi_lock_ap": s["wifi_lock_ap"],
                 "lock_brightness": s["lock_brightness"],
                 "match_gaming_brightness": s["match_gaming_brightness"],
                 "brightness_pct": s["brightness_pct"],

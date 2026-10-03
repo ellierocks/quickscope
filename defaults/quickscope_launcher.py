@@ -43,6 +43,10 @@ BACKLIGHT_ROOT = "/sys/class/backlight"
 SYSFS_ROOT = "/sys"
 OSD_STATE = os.path.join(STATE, "osd.json")
 LOADING_SCREEN = os.path.join(STATE, "loading.qml")
+LOADING_STATUS = os.path.join(STATE, "loading.txt")
+# Kept apart from undo.json: unlocking needs the desktop session's permissions,
+# so a failed unlock waits here for the next session instead of being lost.
+WIFI_LOCK = os.path.join(STATE, "wifi_lock.json")
 SELF = os.path.abspath(__file__)
 
 AUTOSTART_DIR = os.path.join(HOME, ".config", "autostart")
@@ -67,6 +71,8 @@ POWER_SETTINGS = {
     "governor": ("get-cpu-scaling-governor", "set-cpu-scaling-governor"),
     "boost": ("get-cpu-boost-state", "set-cpu-boost-state"),
     "scheduler": ("get-cpu-scheduler", "set-cpu-scheduler"),
+    # Power saving makes many Wi-Fi chips add latency spikes to a stream.
+    "wifi_powersave": ("get-wifi-power-management-state", "set-wifi-power-management-state"),
 }
 # Measured streaming over Moonlight (APU power): SteamOS defaults 7.8 W,
 # performance 8.5 W, battery saver 4.8 W. CPU boost is most of the difference;
@@ -173,19 +179,41 @@ var loadingPid = %LOADING_PID%;
 // Hybrid: desktop Steam runs only for the controller. The Steam button opens
 // its window behind the app, where rendering the store costs 40 percent of a core.
 var minimizeSteamWindows = %MINIMIZE_STEAM_WINDOWS%;
+// The launcher closes the loading screen itself once the network has settled;
+// until then it stays on top of the app.
+var holdLoading = %HOLD_LOADING%;
 var windowAdded = workspace.windowAdded || workspace.clientAdded;
+var windowRemoved = workspace.windowRemoved || workspace.clientRemoved;
 var appWindow = null;
+function windows() {
+    return workspace.windowList ? workspace.windowList() : workspace.clientList();
+}
 function isLoadingScreen(w) {
     return w.pid === loadingPid || String(w.caption) === "%LOADING_TITLE%";
 }
 function isOwnOverlay(w) {
     return isLoadingScreen(w) || String(w.caption) === "%OSD_TITLE%";
 }
-function closeLoadingScreen() {
-    var ws = workspace.windowList ? workspace.windowList() : workspace.clientList();
+function loadingScreen() {
+    var ws = windows();
     for (var i = 0; i < ws.length; i++) {
-        if (isLoadingScreen(ws[i])) ws[i].closeWindow();
+        if (isLoadingScreen(ws[i])) return ws[i];
     }
+    return null;
+}
+function closeLoadingScreen() {
+    var w = loadingScreen();
+    if (w) w.closeWindow();
+}
+function activate(w) {
+    if ("activeWindow" in workspace) workspace.activeWindow = w;
+    else workspace.activeClient = w;
+}
+// Whatever should be in front: a held loading screen, otherwise the app.
+function focusApp() {
+    var held = holdLoading ? loadingScreen() : null;
+    if (held) activate(held);
+    else if (appWindow) activate(appWindow);
 }
 function onWindowAdded(w) {
     if (!w || !w.normalWindow || isOwnOverlay(w)) return;
@@ -193,20 +221,20 @@ function onWindowAdded(w) {
     windowAdded.disconnect(onWindowAdded);
     appWindow = w;
     if (forceFullscreen) w.fullScreen = true;
-    if ("activeWindow" in workspace) workspace.activeWindow = w;
-    else workspace.activeClient = w;
+    focusApp();
     // The app's window is up; the loading screen has done its job.
-    closeLoadingScreen();
+    if (!holdLoading) closeLoadingScreen();
 }
 windowAdded.connect(onWindowAdded);
+windowRemoved.connect(function (w) {
+    if (holdLoading && isLoadingScreen(w)) {
+        holdLoading = false;
+        focusApp();
+    }
+});
 function isSteamWindow(w) {
     var cls = String(w && w.resourceClass).toLowerCase();
     return !!w && w.normalWindow && (cls === "steam" || cls === "steamwebhelper");
-}
-function focusApp() {
-    if (!appWindow) return;
-    if ("activeWindow" in workspace) workspace.activeWindow = appWindow;
-    else workspace.activeClient = appWindow;
 }
 // Minimize, never close: with no tray in this session, closing the main
 // window quits Steam (and Steam Input), and closing its startup/update window
@@ -254,10 +282,26 @@ Window {
             anchors.horizontalCenter: parent.horizontalCenter
         }
         Text {
+            id: message
             text: %(message)s
             color: "#d0d0d0"
             font.pixelSize: 26
             anchors.horizontalCenter: parent.horizontalCenter
+        }
+    }
+
+    // The launcher writes a new message here while it waits (e.g. for Wi-Fi).
+    Timer {
+        interval: 200
+        running: true
+        repeat: true
+        onTriggered: {
+            var xhr = new XMLHttpRequest();
+            xhr.open("GET", %(status_url)s, false);
+            try {
+                xhr.send();
+                if (xhr.responseText.length > 0) message.text = xhr.responseText;
+            } catch (e) {}
         }
     }
 }
@@ -476,7 +520,8 @@ class SessionKeeper(threading.Thread):
                 wanted = resolve_power_profile("auto")
                 if wanted != self.auto_profile:
                     self.auto_profile = wanted
-                    self.power = dict(POWER_PROFILES[wanted])
+                    # Session extras such as Wi-Fi power saving carry over.
+                    self.power = {**self.power, **POWER_PROFILES[wanted]}
                     switched = True
             changed = {}
             for key, value in self.power.items():
@@ -1096,6 +1141,145 @@ def restore_output_config(entry):
     log("restored KWin's display configuration")
 
 
+# --- network -----------------------------------------------------------------
+
+# With "Force WPA Supplicant Wi-Fi backend" on, desktop Steam re-applies the
+# backend when it starts, and steamos-manager does that by restarting
+# NetworkManager even though nothing changed: a short Wi-Fi drop 3-5 s after
+# Steam starts (SteamOS 3.9). With iwd, the default, Steam leaves it alone.
+NM_RESTART_WAIT = 10
+NETWORK_CONNECT_WAIT = 15
+NETWORK_POLL = 0.25
+# How long the app usually takes to open behind the loading screen, before its
+# text moves on to the network.
+APP_OPEN_TIME = 2
+
+
+def wifi_backend():
+    """ "iwd" (SteamOS's default) or "wpa_supplicant" (forced in Developer settings)."""
+    out = run(["steamosctl", "get-wifi-backend"])
+    return out.stdout.rsplit(":", 1)[-1].strip() if succeeded(out) else None
+
+
+def networkmanager_pid():
+    out = run(["systemctl", "show", "-p", "MainPID", "--value", "NetworkManager.service"])
+    return out.stdout.strip() if succeeded(out) else None
+
+
+def network_connected():
+    out = run(["nmcli", "-t", "-g", "STATE", "general"])
+    return succeeded(out) and out.stdout.strip().startswith("connected")
+
+
+def active_wifi():
+    """(device, connection, bssid) of the connected Wi-Fi, or None."""
+    devices = run(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device"])
+    if not succeeded(devices):
+        return None
+    for line in devices.stdout.splitlines():
+        # nmcli -t escapes ":" inside fields as "\:".
+        fields = re.split(r"(?<!\\):", line)
+        if len(fields) == 4 and fields[1] == "wifi" and fields[2] == "connected":
+            device, connection = fields[0], fields[3].replace("\\:", ":")
+            aps = run(
+                ["nmcli", "-t", "-f", "ACTIVE,BSSID", "device", "wifi", "list", "ifname", device, "--rescan", "no"]
+            )
+            for ap in aps.stdout.splitlines() if succeeded(aps) else []:
+                active, _, bssid = ap.partition(":")
+                if active == "yes":
+                    return device, connection, bssid.replace("\\:", ":")
+    return None
+
+
+def set_connection_bssid(connection, bssid):
+    return succeeded(run(["nmcli", "connection", "modify", connection, "802-11-wireless.bssid", bssid or ""]))
+
+
+def lock_access_point():
+    """Pin the Wi-Fi connection to the access point it's on, so it never roams
+    or scans for another mid-stream. Takes effect on the next (re)connect.
+    Returns the locked connection's name, or None."""
+    unlock_access_point()  # a lock left behind by an interrupted session
+    wifi = active_wifi()
+    if not wifi:
+        log("no Wi-Fi connection to lock")
+        return None
+    _, connection, bssid = wifi
+    current = run(["nmcli", "-g", "802-11-wireless.bssid", "connection", "show", connection])
+    original = current.stdout.strip().replace("\\:", ":") if succeeded(current) else ""
+    if original:
+        # The user's own lock (or ours, if unlocking failed): leave it.
+        log(f"{connection} is already locked to {original}")
+        return None
+    write_json(WIFI_LOCK, {"connection": connection, "bssid": original})
+    if not set_connection_bssid(connection, bssid):
+        remove(WIFI_LOCK)
+        log(f"could not lock {connection} to {bssid}")
+        return None
+    log(f"locked {connection} to access point {bssid}")
+    return connection
+
+
+def unlock_access_point():
+    lock = read_json(WIFI_LOCK)
+    if not lock:
+        return
+    if set_connection_bssid(lock["connection"], lock["bssid"]):
+        remove(WIFI_LOCK)
+        log(f"unlocked {lock['connection']}")
+    else:
+        log(f"could not unlock {lock['connection']} yet; trying again next session")
+
+
+def reconnect_wifi(connection):
+    return succeeded(run(["nmcli", "connection", "up", connection]))
+
+
+class NetworkGate(threading.Thread):
+    """Hold the loading screen until the network is settled: after desktop
+    Steam's NetworkManager restart, or after reconnecting to apply the lock."""
+
+    def __init__(self, loading, expect_restart, reconnect=None):
+        super().__init__(daemon=True)
+        self.loading = loading
+        self.expect_restart = expect_restart
+        self.reconnect = reconnect
+        self.pid = networkmanager_pid()
+        self.done = threading.Event()
+
+    def run(self):
+        try:
+            self.wait()
+        finally:
+            write_file(LOADING_STATUS, "")
+            close_loading_screen(self.loading)
+            self.done.set()
+
+    def wait(self):
+        started = time.monotonic()
+        if self.reconnect:
+            write_file(LOADING_STATUS, "Connecting to Wi-Fi…")
+            if not reconnect_wifi(self.reconnect):
+                log(f"reconnecting {self.reconnect} failed")
+        elif self.expect_restart:
+            # "Starting <app>…" while the app opens behind the loading screen.
+            deadline = started + NM_RESTART_WAIT
+            status = None
+            while networkmanager_pid() == self.pid and time.monotonic() < deadline:
+                if status is None and time.monotonic() - started >= APP_OPEN_TIME:
+                    status = "Waiting for the network…"
+                    write_file(LOADING_STATUS, status)
+                time.sleep(NETWORK_POLL)
+            if networkmanager_pid() == self.pid:
+                log(f"NetworkManager wasn't restarted within {NM_RESTART_WAIT}s")
+                return
+            write_file(LOADING_STATUS, "Reconnecting to Wi-Fi…")
+        deadline = time.monotonic() + NETWORK_CONNECT_WAIT
+        while not network_connected() and time.monotonic() < deadline:
+            time.sleep(NETWORK_POLL)
+        log(f"network {'ready' if network_connected() else 'still down'} after {time.monotonic() - started:.1f}s")
+
+
 # --- Moonlight settings override (opt-in) -------------------------------------
 
 MOONLIGHT_FLATPAK = "com.moonlight_stream.Moonlight"
@@ -1245,12 +1429,14 @@ def resolve_power_profile(name):
     return name
 
 
-def apply_power_profile(name):
-    """Apply a POWER_PROFILES entry for the session. Returns the settings that
-    took, for the keeper to hold."""
+def apply_power_profile(name, extra=None):
+    """Apply a POWER_PROFILES entry, plus `extra` settings (e.g. Wi-Fi power
+    saving), for the session. Returns the settings that took, for the keeper
+    to hold."""
     profile = POWER_PROFILES.get(name)
     if not profile or not shutil.which("steamosctl"):
         return {}
+    profile = {**profile, **(extra or {})}
     before, applied = {}, {}
     for key, value in profile.items():
         current = get_power_setting(key)
@@ -1288,6 +1474,7 @@ def restore(reload=True, restart_shell=False):
             systemctl("start", "--no-block", unit)
     if "splash_engine" in undo:
         restore_splash(undo["splash_engine"])
+    unlock_access_point()
     if "moonlight" in undo:
         restore_moonlight(undo["moonlight"])
     if "output_config" in undo:
@@ -1517,7 +1704,7 @@ def wait_for_kwin():
     return False
 
 
-def load_session_script(force_fullscreen, loading, minimize_steam_windows=False):
+def load_session_script(force_fullscreen, loading, minimize_steam_windows=False, hold_loading=False):
     """Load the KWin script that fullscreens/activates the app's first window
     and closes the loading screen once that window appears."""
     script = (
@@ -1526,6 +1713,7 @@ def load_session_script(force_fullscreen, loading, minimize_steam_windows=False)
         .replace("%LOADING_PID%", str(loading.pid if loading else -1))
         .replace("%FORCE_FULLSCREEN%", "true" if force_fullscreen else "false")
         .replace("%MINIMIZE_STEAM_WINDOWS%", "true" if minimize_steam_windows else "false")
+        .replace("%HOLD_LOADING%", "true" if hold_loading else "false")
     )
     write_file(KWIN_SCRIPT, script)
     dbus("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", f"string:{KWIN_SCRIPT_NAME}")
@@ -1556,16 +1744,19 @@ def show_loading_screen(message):
     if not qml:
         log("no qml runtime, skipping loading screen")
         return None
+    write_file(LOADING_STATUS, "")
     write_file(
         LOADING_SCREEN,
         LOADING_QML
         % {
             "title": json.dumps(LOADING_TITLE),
             "message": json.dumps(message),
+            "status_url": json.dumps("file://" + LOADING_STATUS),
         },
     )
+    env = dict(os.environ, QML_XHR_ALLOW_FILE_READ="1")
     try:
-        return subprocess.Popen([qml, LOADING_SCREEN], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return subprocess.Popen([qml, LOADING_SCREEN], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as e:
         log(f"loading screen failed: {e}")
         return None
@@ -1745,10 +1936,29 @@ def launch():
         log("loading screen exited early, starting it again")
         loading = show_loading_screen(starting)
 
+    # Network, before desktop Steam starts (and restarts NetworkManager): the
+    # lock then takes effect on that reconnect.
     hybrid = pending.get("mode") == "hybrid"
+    starts_steam = pending.get("mode") in ("hybrid", "steam")
+    # Only wpa_supplicant scans in the background and only it gets restarted by
+    # desktop Steam. iwd picks access points itself (NetworkManager can't pin
+    # one through it) and roams only on a weak signal.
+    wpa = wifi_backend() == "wpa_supplicant"
+    locked = None
+    if pending.get("wifi_lock_ap", True):
+        if wpa:
+            locked = lock_access_point()
+        else:
+            log("iwd handles roaming itself, not locking the access point")
+    expect_restart = starts_steam and wpa
+    # Hold the loading screen over the app until the network has settled.
+    hold_loading = bool(loading) and (expect_restart or bool(locked))
+
     script = bool(
         (pending.get("force_fullscreen") or loading or hybrid)
-        and load_session_script(pending.get("force_fullscreen"), loading, minimize_steam_windows=hybrid)
+        and load_session_script(
+            pending.get("force_fullscreen"), loading, minimize_steam_windows=hybrid, hold_loading=hold_loading
+        )
     )
     if loading and not script:
         # Without the script nothing can tell when the app's window is up.
@@ -1760,7 +1970,8 @@ def launch():
     profile = resolve_power_profile(chosen)
     if chosen == "auto":
         log(f"automatic power profile: {'plugged in' if plugged_in() else 'on battery'}")
-    power = apply_power_profile(profile)
+    extra = {"wifi_powersave": "disabled"} if pending.get("wifi_powersave_off", True) else {}
+    power = apply_power_profile(profile, extra)
     keeper = None
     if power or brightness_raw is not None:
         hold_for = None if pending.get("lock_brightness") else BRIGHTNESS_SETTLE_TIME
@@ -1779,6 +1990,10 @@ def launch():
     combo = BrightnessCombo(osd, keeper)
     combo.start()
     returning = pending.get("return_to_gaming")
+    if hold_loading:
+        # Desktop Steam restarts NetworkManager (wpa_supplicant); otherwise
+        # reconnect once ourselves so the access point lock applies.
+        NetworkGate(loading, expect_restart=expect_restart, reconnect=None if expect_restart else locked).start()
     try:
         log(f"launching {time.monotonic() - started:.1f}s after start")
         if pending.get("mode") in ("direct", "hybrid"):

@@ -269,6 +269,25 @@ function Content() {
         </PanelSectionRow>
       </PanelSection>
 
+      <PanelSection title="Network">
+        <PanelSectionRow>
+          <ToggleField
+            label="Disable Wi-Fi power saving"
+            description="Power saving makes many Wi-Fi chips add latency spikes to a stream."
+            checked={settings.wifi_powersave_off}
+            onChange={(v) => update("wifi_powersave_off", v)}
+          />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ToggleField
+            label="Lock Wi-Fi access point"
+            description="Stay on the access point you're connected to, with no background scans or roaming that can stutter a stream. Applies with the WPA Supplicant Wi-Fi backend (Developer settings); SteamOS's default backend only roams on a weak signal."
+            checked={settings.wifi_lock_ap}
+            onChange={(v) => update("wifi_lock_ap", v)}
+          />
+        </PanelSectionRow>
+      </PanelSection>
+
       {display && (
         <PanelSection title={display.external ? "External display" : "Display"}>
           {/* A single-mode SDR panel like the Deck LCD has nothing to choose. */}

@@ -147,6 +147,7 @@ class SessionScript(LauncherTestCase):
             .replace("%LOADING_PID%", "1234")
             .replace("%FORCE_FULLSCREEN%", "true")
             .replace("%MINIMIZE_STEAM_WINDOWS%", "true")
+            .replace("%HOLD_LOADING%", "false")
         )
         self.assertNotIn("%", js)
         path = os.path.join(self.home, "session.js")
@@ -163,6 +164,7 @@ class SessionScript(LauncherTestCase):
             .replace("%LOADING_PID%", "-1")
             .replace("%FORCE_FULLSCREEN%", "true")
             .replace("%MINIMIZE_STEAM_WINDOWS%", "true")
+            .replace("%HOLD_LOADING%", "false")
         )
         # A fake KWin: windows arrive in order, as when Steam's button opens it mid-stream.
         harness = """
@@ -171,7 +173,8 @@ function signal() {
   return { handlers, connect: (f) => handlers.push(f), disconnect: (f) => handlers.splice(handlers.indexOf(f), 1),
            emit: (...a) => [...handlers].forEach((f) => f(...a)) };
 }
-const workspace = { windowAdded: signal(), windowActivated: signal(), windowList: () => [], activeWindow: null };
+const workspace = { windowAdded: signal(), windowRemoved: signal(), windowActivated: signal(),
+                    windowList: () => [], activeWindow: null };
 function win(cls) {
   return { resourceClass: cls, caption: cls, normalWindow: true, pid: 1, closed: false,
            minimized: false, fullScreen: false, minimizedChanged: signal(),
@@ -200,6 +203,49 @@ console.log(JSON.stringify({ windows: [steamUpdate, app, steamStore].map(state),
         self.assertEqual(steam_store, {"closed": False, "minimized": True, "fullScreen": False})
         self.assertEqual(app, {"closed": False, "minimized": False, "fullScreen": True})
         self.assertTrue(out["appActive"])
+
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_held_loading_screen_stays_in_front_until_closed(self):
+        js = (
+            self.l.SESSION_JS.replace("%LOADING_TITLE%", self.l.LOADING_TITLE)
+            .replace("%OSD_TITLE%", self.l.OSD_TITLE)
+            .replace("%LOADING_PID%", "42")
+            .replace("%FORCE_FULLSCREEN%", "true")
+            .replace("%MINIMIZE_STEAM_WINDOWS%", "true")
+            .replace("%HOLD_LOADING%", "true")
+        )
+        harness = """
+function signal() {
+  const handlers = [];
+  return { connect: (f) => handlers.push(f), disconnect: (f) => handlers.splice(handlers.indexOf(f), 1),
+           emit: (...a) => [...handlers].forEach((f) => f(...a)) };
+}
+let open = [];
+const workspace = { windowAdded: signal(), windowRemoved: signal(), windowActivated: signal(),
+                    windowList: () => open, activeWindow: null };
+function win(cls, pid) {
+  return { resourceClass: cls, caption: cls, normalWindow: true, pid, closed: false, minimized: false,
+           fullScreen: false, minimizedChanged: signal(), closeWindow() { this.closed = true; } };
+}
+%SCRIPT%
+const loading = win("qml6", 42);
+const app = win("com.moonlight_stream.Moonlight", 7);
+open = [loading];
+workspace.windowAdded.emit(loading);
+open = [loading, app];
+workspace.windowAdded.emit(app);
+const whileHeld = { active: workspace.activeWindow === loading ? "loading" : "app", closed: loading.closed,
+                    fullScreen: app.fullScreen };
+// The launcher closes the loading screen once the network is ready.
+open = [app];
+workspace.windowRemoved.emit(loading);
+console.log(JSON.stringify({ whileHeld, after: workspace.activeWindow === app ? "app" : "other" }));
+""".replace("%SCRIPT%", js)
+        result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = json.loads(result.stdout)
+        self.assertEqual(out["whileHeld"], {"active": "loading", "closed": False, "fullScreen": True})
+        self.assertEqual(out["after"], "app")
 
 
 class Brightness(LauncherTestCase):
@@ -347,6 +393,62 @@ class Power(LauncherTestCase):
         time.sleep(0.2)
         keeper.stop()
         self.assertEqual(self.state["boost"], "disabled")
+
+
+class Network(LauncherTestCase):
+    """Fake nmcli: one Wi-Fi connection whose saved BSSID the tests can see."""
+
+    def setUp(self):
+        super().setUp()
+        self.profile_bssid = ""
+        self.fail_modify = False
+
+        def fake_run(cmd):
+            if cmd[:2] == ["nmcli", "-t"] and cmd[-1] == "device":
+                out = (
+                    "eth0:ethernet:unavailable:\nwlan0:wifi:connected:My\\:Net\nlo:loopback:connected (externally):lo\n"
+                )
+            elif "wifi" in cmd and "list" in cmd:
+                out = "no:BC\\:51\\:5F\\:57\\:11\\:6C\nyes:BC\\:51\\:5F\\:57\\:11\\:68\n"
+            elif cmd[:3] == ["nmcli", "-g", "802-11-wireless.bssid"]:
+                out = self.profile_bssid.replace(":", "\\:") + "\n"
+            elif cmd[:3] == ["nmcli", "connection", "modify"]:
+                if self.fail_modify:
+                    return subprocess.CompletedProcess(cmd, 1, "Error: insufficient privileges\n")
+                self.assertEqual(cmd[3], "My:Net")
+                self.profile_bssid = cmd[5]
+                out = ""
+            else:
+                out = ""
+            return subprocess.CompletedProcess(cmd, 0, out)
+
+        self.l.run = fake_run
+
+    def test_active_wifi_unescapes_nmcli(self):
+        self.assertEqual(self.l.active_wifi(), ("wlan0", "My:Net", "BC:51:5F:57:11:68"))
+
+    def test_lock_and_unlock(self):
+        self.assertEqual(self.l.lock_access_point(), "My:Net")
+        self.assertEqual(self.profile_bssid, "BC:51:5F:57:11:68")
+        self.l.restore(reload=False)
+        self.assertEqual(self.profile_bssid, "")
+        self.assertFalse(os.path.exists(self.l.WIFI_LOCK))
+
+    def test_the_users_own_lock_is_left_alone(self):
+        self.profile_bssid = "AA:BB:CC:DD:EE:FF"
+        self.assertIsNone(self.l.lock_access_point())
+        self.assertEqual(self.profile_bssid, "AA:BB:CC:DD:EE:FF")
+
+    def test_failed_unlock_is_retried_later(self):
+        self.l.lock_access_point()
+        self.fail_modify = True
+        self.l.restore(reload=False)  # e.g. from outside the desktop session
+        self.assertTrue(os.path.exists(self.l.WIFI_LOCK))
+        self.fail_modify = False
+        self.l.lock_access_point()  # next session: unlocks first, then locks again
+        self.l.restore(reload=False)
+        self.assertEqual(self.profile_bssid, "")
+        self.assertFalse(os.path.exists(self.l.WIFI_LOCK))
 
 
 # EDID of a Samsung 4K HDR TV, as `modetest -c` prints it.

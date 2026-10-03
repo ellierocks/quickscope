@@ -75,6 +75,8 @@ Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quicksc
 | Return to Gaming Mode on exit | On |
 | Force fullscreen | On |
 | Power profile: Automatic (Battery saver on battery, High performance when plugged in), High performance, or Battery saver (about 40% less chip power while streaming) | Automatic |
+| Disable Wi-Fi power saving (it adds latency spikes on many Wi-Fi chips) | On |
+| Lock Wi-Fi access point (no roaming or background scans; with the WPA Supplicant backend) | On |
 | Starting brightness | Matches Gaming Mode; or a fixed level |
 | Lock brightness (stops KDE's power management changing it) | On |
 | Display mode and HDR (on an external display, or a built-in panel with several modes or HDR): match Gaming Mode, or pick one of the display's own modes | Match Gaming Mode |
@@ -88,6 +90,7 @@ There's no Quick Access menu outside Gaming Mode, so Quickscope adds its own con
 ## Troubleshooting
 
 - **Stuck on the desktop?** Use *Return to Gaming Mode*, or run `steamos-session-select gamescope`.
+- **Wi-Fi drops for a moment when the desktop starts?** That's SteamOS: with *Force WPA Supplicant Wi-Fi backend* on (Developer settings), Steam restarts NetworkManager whenever it starts, in normal Desktop Mode too. Quickscope holds its loading screen until the network is back. Turning that setting off avoids the drop entirely.
 - **No loading screen when docked?** Expected: a TV takes a few seconds to re-sync after the session switch, and the app is usually open before the picture comes back.
 - **Decky disappeared after several very short sessions in a row?** Decky's crash protection disables it when Steam's UI goes away three times within about a minute, and each Quickscope round trip closes Steam's UI twice. Restart the Deck (or `sudo systemctl start plugin_loader`) to bring it back. Normal sessions longer than a minute don't trigger it.
 - **Logs:** `~/.local/state/quickscope/launcher.log` (launch timings and every change made or undone), and Decky's log in `~/homebrew/logs/Quickscope/`.
