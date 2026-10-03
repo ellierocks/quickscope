@@ -290,6 +290,14 @@ Window {
     visibility: Window.FullScreen
     color: "black"
 
+    // No pointer over the loading screen.
+    MouseArea {
+        anchors.fill: parent
+        acceptedButtons: Qt.NoButton
+        hoverEnabled: true
+        cursorShape: Qt.BlankCursor
+    }
+
     Column {
         anchors.centerIn: parent
         spacing: 24
@@ -298,7 +306,6 @@ Window {
         Item {
             width: 48
             height: 48
-            visible: %(spinner)s
             anchors.horizontalCenter: parent.horizontalCenter
             Canvas {
                 anchors.fill: parent
@@ -331,16 +338,6 @@ Window {
             text: %(message)s
             color: "#d0d0d0"
             font.pixelSize: 26
-            anchors.horizontalCenter: parent.horizontalCenter
-        }
-        // Without the spinner: a still accent that looks intended when the
-        // screen is frozen through the handoff to Gamescope.
-        Rectangle {
-            visible: !%(spinner)s
-            width: 64
-            height: 4
-            radius: 2
-            color: "#1a9fff"
             anchors.horizontalCenter: parent.horizontalCenter
         }
     }
@@ -1874,14 +1871,8 @@ def load_session_script(force_fullscreen, loading, minimize_steam_windows=False,
     return False
 
 
-def show_loading_screen(message, outlive_compositor=False):
-    """A full-screen loading screen with `message`. Returns the process or None.
-
-    With `outlive_compositor`, the screen stays visible after KWin exits, until
-    Gamescope takes over. KWin leaves its own last frame on screen when it
-    quits, but an opaque full-screen window is scanned out directly from the
-    app's buffer, which goes black as KWin closes. A translucent window (still
-    painted solid black) is always composited into KWin's frame instead."""
+def show_loading_screen(message):
+    """A full-screen loading screen with `message`. Returns the process or None."""
     qml = shutil.which("qml6") or shutil.which("qml")
     if not qml:
         log("no qml runtime, skipping loading screen")
@@ -1891,13 +1882,7 @@ def show_loading_screen(message, outlive_compositor=False):
         "title": json.dumps(LOADING_TITLE),
         "message": json.dumps(message),
         "status_url": json.dumps("file://" + LOADING_STATUS),
-        # A spinner frozen mid-turn would look like a hang.
-        "spinner": "false" if outlive_compositor else "true",
     }
-    if outlive_compositor:
-        screen = screen.replace('    color: "black"\n', '    color: "transparent"\n', 1).replace(
-            "    Column {", '    Rectangle { anchors.fill: parent; color: "black" }\n    Column {', 1
-        )
     write_file(LOADING_SCREEN, screen)
     env = dict(os.environ, QML_XHR_ALLOW_FILE_READ="1")
     try:
@@ -2070,6 +2055,8 @@ def wait_for_steam_exit(requested):
 
 
 def return_to_gaming():
+    # The screen goes black between KWin exiting (it clears the display as it
+    # shuts down) and Steam's UI drawing in Gamescope, a few seconds later.
     exe = shutil.which("steamos-session-select")
     if exe:
         log("returning to Gaming Mode")
@@ -2190,7 +2177,7 @@ def launch():
         close_loading_screen(loading)
         if returning:
             # Covers the clean-up and logout; the logout closes it.
-            show_loading_screen("Returning to Gaming Mode…", outlive_compositor=True)
+            show_loading_screen("Returning to Gaming Mode…")
         steam_shutdown = request_steam_shutdown() if returning else None
         combo.stop()
         if volume:
