@@ -29,6 +29,11 @@ import { LibraryApp, getLibraryApps, getSteamBrightness } from "./library";
 
 const POWER_PROFILES: { data: PowerProfile; label: string; description: string }[] = [
   {
+    data: "auto",
+    label: "Automatic",
+    description: "Battery saver on battery, High performance when plugged in. Switches if you plug in or unplug.",
+  },
+  {
     data: "performance",
     label: "High performance",
     description: "GPU and CPU at full speed while the app runs.",

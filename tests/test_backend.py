@@ -91,7 +91,7 @@ class PrepareLaunch(unittest.TestCase):
         self.assertEqual(self.plugin.settings["launch_modes"], {"1": "direct"})
 
     def test_power_profile_reaches_the_launch(self):
-        self.assertEqual(self.stage(SHORTCUT)[1]["power_profile"], "performance")
+        self.assertEqual(self.stage(SHORTCUT)[1]["power_profile"], "auto")
         asyncio.run(self.plugin.set_setting("power_profile", "battery"))
         self.assertEqual(self.stage(SHORTCUT)[1]["power_profile"], "battery")
         with self.assertRaises(ValueError):

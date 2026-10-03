@@ -12,8 +12,9 @@ SETTINGS_DEFAULTS = {
     "return_to_gaming": True,
     "force_fullscreen": True,
     # "performance": GPU clocks high, performance governor. "battery": GPU on
-    # auto, powersave governor, CPU boost off (about 44% less APU power).
-    "power_profile": "performance",
+    # auto, powersave governor, CPU boost off (about 40% less APU power).
+    # "auto": battery on battery, performance when plugged in.
+    "power_profile": "auto",
     # Hold the screen at one brightness for the session (there's no Quick
     # Access menu to change it): Gaming Mode's level, or brightness_pct.
     "lock_brightness": True,
@@ -29,7 +30,7 @@ SETTINGS_DEFAULTS = {
 # Always Plasma on Wayland: on X11 apps could leave fullscreen and startup was slower.
 WAYLAND_SESSION = "plasma.desktop"
 LAUNCH_MODES = ("hybrid", "direct")
-POWER_PROFILES = ("performance", "battery")
+POWER_PROFILES = ("auto", "performance", "battery")
 DEFAULT_SHORTCUT_MODE = "hybrid"
 
 # Must match PENDING_MAX_AGE in quickscope_launcher.py.

@@ -11,7 +11,7 @@ export interface Settings {
   launch_modes: Record<string, ShortcutMode>;
 }
 
-export type PowerProfile = "performance" | "battery";
+export type PowerProfile = "auto" | "performance" | "battery";
 
 /** How a launch actually runs. "steam" is only used for Steam games. */
 export type LaunchMode = "steam" | "hybrid" | "direct";

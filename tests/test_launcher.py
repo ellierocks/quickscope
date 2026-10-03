@@ -243,6 +243,35 @@ class Power(LauncherTestCase):
     def test_unknown_profile_does_nothing(self):
         self.assertEqual(self.l.apply_power_profile("turbo"), {})
 
+    def supplies(self, **supplies):
+        self.l.POWER_SUPPLY_ROOT = os.path.join(self.home, "power_supply")
+        for name, (kind, online) in supplies.items():
+            self.l.write_file(os.path.join(self.l.POWER_SUPPLY_ROOT, name, "type"), kind + "\n")
+            if online is not None:
+                self.l.write_file(os.path.join(self.l.POWER_SUPPLY_ROOT, name, "online"), online + "\n")
+
+    def test_auto_follows_the_charger(self):
+        self.supplies(ACAD=("Mains", "1"), BAT1=("Battery", None))
+        self.assertEqual(self.l.resolve_power_profile("auto"), "performance")
+        self.supplies(ACAD=("Mains", "0"), BAT1=("Battery", None))
+        self.assertEqual(self.l.resolve_power_profile("auto"), "battery")
+        self.assertEqual(self.l.resolve_power_profile("battery"), "battery")
+
+    def test_auto_without_a_battery_is_performance(self):
+        self.supplies()
+        self.assertEqual(self.l.resolve_power_profile("auto"), "performance")
+
+    def test_keeper_switches_when_unplugged(self):
+        self.supplies(ACAD=("Mains", "1"), BAT1=("Battery", None))
+        power = self.l.apply_power_profile("performance")
+        keeper = self.l.SessionKeeper(power, None, auto_profile="performance")
+        self.l.KEEPER_INTERVAL = 0.01
+        self.supplies(ACAD=("Mains", "0"), BAT1=("Battery", None))
+        keeper.start()
+        time.sleep(0.2)
+        keeper.stop()
+        self.assertEqual(self.state["boost"], "disabled")
+
 
 class Combo(LauncherTestCase):
     def report(self, steam, y):

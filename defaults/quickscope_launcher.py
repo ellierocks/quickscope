@@ -68,6 +68,9 @@ POWER_PROFILES = {
     "performance": {"gpu": "high", "governor": "performance", "boost": "enabled"},
     "battery": {"gpu": "auto", "governor": "powersave", "boost": "disabled"},
 }
+# "auto" picks one of these by power source, and follows it while running.
+AUTO_PROFILES = {"plugged_in": "performance", "on_battery": "battery"}
+POWER_SUPPLY_ROOT = "/sys/class/power_supply"
 
 # Steam's brightness slider drives the backlight through roughly this curve
 # (measured on a Deck LCD: 48% -> 26% of the backlight's range, 100% -> max).
@@ -333,6 +336,14 @@ def remove(path):
         pass
 
 
+def read_text(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
 def read_json(path):
     try:
         with open(path) as f:
@@ -388,9 +399,11 @@ class SessionKeeper(threading.Thread):
     runs: desktop Steam puts the GPU performance level back to auto when it
     starts, and KDE's power management changes the brightness."""
 
-    def __init__(self, power, brightness_raw, hold_brightness_for=None):
+    def __init__(self, power, brightness_raw, hold_brightness_for=None, auto_profile=None):
         super().__init__(daemon=True)
         self.power = power
+        # With the automatic profile, the profile currently in use.
+        self.auto_profile = auto_profile
         self.brightness_raw = brightness_raw
         # Without the lock, only hold brightness while KDE starts up.
         self.release_at = None if hold_brightness_for is None else time.monotonic() + hold_brightness_for
@@ -400,10 +413,22 @@ class SessionKeeper(threading.Thread):
         while not self.stopped.wait(KEEPER_INTERVAL):
             if self.release_at is not None and time.monotonic() >= self.release_at:
                 self.brightness_raw = self.release_at = None
+            switched = False
+            if self.auto_profile:
+                wanted = resolve_power_profile("auto")
+                if wanted != self.auto_profile:
+                    self.auto_profile = wanted
+                    self.power = dict(POWER_PROFILES[wanted])
+                    switched = True
+            changed = {}
             for key, value in self.power.items():
                 current = get_power_setting(key)
                 if current is not None and current != value and set_power_setting(key, value):
-                    log(f"{key} was reset to {current}, set to {value} again")
+                    changed[key] = current
+            if switched:
+                log(f"power source changed, switched to the {self.auto_profile} profile (was {changed})")
+            elif changed:
+                log(f"re-applied {self.power} after something reset {changed}")
             if self.brightness_raw is not None:
                 current = read_backlight()
                 if current and current[0] != self.brightness_raw and write_backlight(self.brightness_raw):
@@ -682,6 +707,23 @@ def get_power_setting(key):
 
 def set_power_setting(key, value):
     return succeeded(run(["steamosctl", POWER_SETTINGS[key][1], value]))
+
+
+def plugged_in():
+    """True on mains power, or on a device without a battery."""
+    has_battery = False
+    for supply in glob.glob(os.path.join(POWER_SUPPLY_ROOT, "*")):
+        kind = read_text(os.path.join(supply, "type"))
+        if kind == "Mains" and read_text(os.path.join(supply, "online")) == "1":
+            return True
+        has_battery = has_battery or kind == "Battery"
+    return not has_battery
+
+
+def resolve_power_profile(name):
+    if name == "auto":
+        return AUTO_PROFILES["plugged_in" if plugged_in() else "on_battery"]
+    return name
 
 
 def apply_power_profile(name):
@@ -1165,11 +1207,16 @@ def launch():
         timer.daemon = True
         timer.start()
 
-    power = apply_power_profile(pending.get("power_profile", "performance"))
+    chosen = pending.get("power_profile", "auto")
+    profile = resolve_power_profile(chosen)
+    if chosen == "auto":
+        log(f"automatic power profile: {'plugged in' if plugged_in() else 'on battery'}")
+    power = apply_power_profile(profile)
     keeper = None
     if power or brightness_raw is not None:
         hold_for = None if pending.get("lock_brightness") else BRIGHTNESS_SETTLE_TIME
-        keeper = SessionKeeper(power, brightness_raw, hold_for)
+        keeper = SessionKeeper(power, brightness_raw, hold_for,
+                               auto_profile=profile if chosen == "auto" and power else None)
         keeper.start()
     # Plasma's panel, which the session skips, normally draws the volume
     # indicator; brightness has no control at all outside Gaming Mode.

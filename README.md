@@ -72,7 +72,7 @@ Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quicksc
 |---|---|
 | Return to Gaming Mode on exit | On |
 | Force fullscreen | On |
-| Power profile (Battery saver uses about half the chip power while streaming) | High performance |
+| Power profile: Automatic (Battery saver on battery, High performance when plugged in), High performance, or Battery saver (about 40% less chip power while streaming) | Automatic |
 | Starting brightness | Matches Gaming Mode; or a fixed level |
 | Lock brightness (stops KDE's power management changing it) | On |
 
@@ -106,7 +106,7 @@ There's no Quick Access menu outside Gaming Mode, so Quickscope adds its own con
 | No Plasma panel | `systemctl --user mask --runtime plasma-plasmashell.service` |
 | Brightness | Writes the backlight (`/sys/class/backlight/*/brightness`) and re-applies it if KDE changes it (for the whole session with the lock, otherwise while the desktop starts); the original level is restored afterwards |
 | Brightness shortcut | Reads the built-in controller's hidraw reports without grabbing them, so Steam and the app still get every input |
-| Power profile *(setting)* | High performance: GPU level `high`, `performance` governor. Battery saver: GPU `auto`, `powersave` governor, CPU boost off. Set with `steamosctl`, re-applied while running, restored afterwards |
+| Power profile *(setting)* | High performance: GPU level `high`, `performance` governor. Battery saver: GPU `auto`, `powersave` governor, CPU boost off. Automatic picks one from `/sys/class/power_supply` and switches if you plug in or unplug. Set with `steamosctl`, re-applied while running, restored afterwards |
 
 Everything lives in `~/.config` or `/run`, never in files a SteamOS update replaces. If Quickscope had to create `ksplashrc`, it deletes it again afterwards.
 
