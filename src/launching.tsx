@@ -33,6 +33,9 @@ function LaunchingPage() {
 /** Show the launching page; resolves once it has had a moment to render. */
 export function showLaunchingPage(name: string): Promise<void> {
   appName = name;
+  // Launching from the Quick Access menu would otherwise open the page
+  // behind the menu, where it can't be seen.
+  Navigation.CloseSideMenus();
   Navigation.Navigate(LAUNCHING_ROUTE);
   return new Promise((resolve) => setTimeout(resolve, 250));
 }
