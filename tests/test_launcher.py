@@ -757,10 +757,28 @@ class Volume(LauncherTestCase):
         self.assertIsNone(self.l.parse_volume("", "Mute: no"))
 
     def test_loading_qml_is_filled_in(self):
-        qml = self.l.LOADING_QML % {"title": '"t"', "message": '"Starting…"', "status_url": '"file:///x"'}
+        qml = self.l.LOADING_QML % {
+            "title": '"t"',
+            "message": '"Starting…"',
+            "status_url": '"file:///x"',
+            "spinner": "true",
+        }
         self.assertNotIn("%(", qml)
         # Self-drawn spinner: nothing from the desktop theme.
         self.assertNotIn("QtQuick.Controls", qml)
+
+    def test_returning_screen_is_translucent_so_it_outlives_kwin(self):
+        real_which = shutil.which
+        self.addCleanup(setattr, shutil, "which", real_which)
+        shutil.which = lambda name: "/bin/true" if name == "qml6" else None
+        self.l.show_loading_screen("Returning…", outlive_compositor=True)
+        with open(self.l.LOADING_SCREEN) as f:
+            qml = f.read()
+        self.assertIn('color: "transparent"', qml)
+        self.assertIn('Rectangle { anchors.fill: parent; color: "black" }', qml)
+        self.l.show_loading_screen("Starting…")
+        with open(self.l.LOADING_SCREEN) as f:
+            self.assertIn('color: "black"', f.read())
 
     def test_osd_qml_is_filled_in(self):
         qml = self.l.OSD_QML % {"title": '"t"', "state_url": '"file:///x"'}
