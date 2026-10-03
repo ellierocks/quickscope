@@ -96,11 +96,15 @@ function AppRow({
         onSecondaryButton={() => onTogglePin(app)}
         onSecondaryActionDescription={pinned ? "Unpin" : "Pin"}
         onOptionsButton={isShortcut ? () => onCycleMode(app) : undefined}
-        onOptionsActionDescription={isShortcut ? (label === MODE_NAMES.direct ? "Use Hybrid" : "Use Direct") : undefined}
+        onOptionsActionDescription={
+          isShortcut ? (label === MODE_NAMES.direct ? "Use Hybrid" : "Use Direct") : undefined
+        }
         style={{ padding: "8px 12px", minWidth: 0, borderRadius: 0 }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <span style={{ flex: 1, textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <span
+            style={{ flex: 1, textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          >
             {pinned ? "★ " : ""}
             {app.name}
           </span>
@@ -278,9 +282,7 @@ function Content() {
                     : "Use the refresh rate and HDR setting Gaming Mode uses."
                 }
                 checked={!settings.display_mode}
-                onChange={(v) =>
-                  update("display_mode", v ? "" : display.current ?? display.modes[0])
-                }
+                onChange={(v) => update("display_mode", v ? "" : (display.current ?? display.modes[0]))}
               />
             </PanelSectionRow>
           )}
@@ -301,11 +303,7 @@ function Content() {
           )}
           {!!settings.display_mode && display.hdr_capable && (
             <PanelSectionRow>
-              <ToggleField
-                label="HDR"
-                checked={settings.display_hdr}
-                onChange={(v) => update("display_hdr", v)}
-              />
+              <ToggleField label="HDR" checked={settings.display_hdr} onChange={(v) => update("display_hdr", v)} />
             </PanelSectionRow>
           )}
           <PanelSectionRow>

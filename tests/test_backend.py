@@ -1,4 +1,5 @@
 """Tests for the Decky backend (main.py), with decky and pwd stubbed out."""
+
 import asyncio
 import json
 import logging
@@ -29,8 +30,13 @@ if not hasattr(os, "getuid"):
 sys.path.insert(0, str(ROOT))
 import main  # noqa: E402
 
-SHORTCUT = {"appid": 3000000001, "name": "Moonlight", "kind": "shortcut",
-            "exe": '"/usr/bin/flatpak"', "launch_options": "run com.moonlight_stream.Moonlight"}
+SHORTCUT = {
+    "appid": 3000000001,
+    "name": "Moonlight",
+    "kind": "shortcut",
+    "exe": '"/usr/bin/flatpak"',
+    "launch_options": "run com.moonlight_stream.Moonlight",
+}
 
 
 async def _no_launcher(*args):
@@ -106,8 +112,9 @@ class PrepareLaunch(unittest.TestCase):
 
     def test_settings_migration(self):
         with open(self.plugin._settings_path(), "w") as f:
-            json.dump({"direct_nonsteam": False, "skip_desktop_steam": True,
-                       "launch_modes": {"5": "steam", "6": "direct"}}, f)
+            json.dump(
+                {"direct_nonsteam": False, "skip_desktop_steam": True, "launch_modes": {"5": "steam", "6": "direct"}}, f
+            )
         self.plugin._load_settings()
         self.assertEqual(self.plugin.settings["launch_modes"], {"6": "direct"})
         self.assertNotIn("direct_nonsteam", self.plugin.settings)
@@ -133,8 +140,9 @@ class GamescopeWatchdog(unittest.TestCase):
         self.assertEqual(self.run_states(["active", "deactivating", "deactivating", "inactive"]), [])
 
     def test_stuck_stop_is_killed_once(self):
-        self.assertEqual(self.run_states(["active", "deactivating"]),
-                         [("kill", "--signal=SIGKILL", "gamescope-session.service")])
+        self.assertEqual(
+            self.run_states(["active", "deactivating"]), [("kill", "--signal=SIGKILL", "gamescope-session.service")]
+        )
 
 
 if __name__ == "__main__":

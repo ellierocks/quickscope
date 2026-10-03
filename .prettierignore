@@ -1,0 +1,5 @@
+dist/
+out/
+pnpm-lock.yaml
+# Prettier pads every table cell to line up; the docs' tables have long cells.
+*.md

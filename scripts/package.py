@@ -5,6 +5,7 @@
 Run after `pnpm build`. Mirrors the Decky CLI layout: everything under a
 top-level Quickscope/ folder, with defaults/* copied into the plugin root.
 """
+
 import json
 import pathlib
 import sys

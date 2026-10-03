@@ -164,14 +164,16 @@ async def _run_launcher(*args):
         return 1, "launcher not installed"
     python = "/usr/bin/python3" if os.path.exists("/usr/bin/python3") else (_which("python3") or "python3")
     proc = await asyncio.create_subprocess_exec(
-        python, launcher, *args,
+        python,
+        launcher,
+        *args,
         env=_system_env(),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=LAUNCHER_TIMEOUT)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         proc.kill()
         return 1, f"launcher {' '.join(args)} timed out"
     return proc.returncode, out.decode(errors="replace").strip()
@@ -195,7 +197,9 @@ def _pending_is_fresh():
 
 async def _systemctl_user(*args):
     proc = await asyncio.create_subprocess_exec(
-        "systemctl", "--user", *args,
+        "systemctl",
+        "--user",
+        *args,
         env=_system_env(),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
@@ -266,8 +270,7 @@ class Plugin:
             decky.logger.warning(f"Could not read settings, using defaults: {e}")
             self.settings = dict(SETTINGS_DEFAULTS)
         # Ignore unknown per-app methods (e.g. from older versions).
-        self.settings["launch_modes"] = {
-            k: v for k, v in self.settings["launch_modes"].items() if v in LAUNCH_MODES}
+        self.settings["launch_modes"] = {k: v for k, v in self.settings["launch_modes"].items() if v in LAUNCH_MODES}
         if self.settings["power_profile"] not in POWER_PROFILES:
             self.settings["power_profile"] = SETTINGS_DEFAULTS["power_profile"]
 
@@ -296,8 +299,9 @@ class Plugin:
         elif key == "display_scale":
             value = max(100, min(300, int(value)))
         elif key == "moonlight_profiles":
-            value = {str(k): _clean_moonlight_profile(p) for k, p in value.items()
-                     if re.fullmatch(r"[\w.-]{1,40}", str(k))}
+            value = {
+                str(k): _clean_moonlight_profile(p) for k, p in value.items() if re.fullmatch(r"[\w.-]{1,40}", str(k))
+            }
         elif key == "favorites":
             value = [int(v) for v in value]
         elif key == "launch_modes":
@@ -428,7 +432,7 @@ class Plugin:
         self._gamescope_watchdog = asyncio.create_task(_hurry_gamescope_stop())
         try:
             out, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # Still running means the session teardown is underway.
             return {"ok": True}
         if proc.returncode != 0:

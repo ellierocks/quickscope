@@ -1,15 +1,7 @@
 import { ConfirmModal, Router, showModal } from "@decky/ui";
 import { toaster } from "@decky/api";
 
-import {
-  LaunchMode,
-  LaunchSpec,
-  Settings,
-  ShortcutMode,
-  cancelPending,
-  prepareLaunch,
-  switchSession,
-} from "./backend";
+import { LaunchMode, LaunchSpec, Settings, ShortcutMode, cancelPending, prepareLaunch, switchSession } from "./backend";
 import { hideLaunchingPage, showLaunchingPage } from "./launching";
 import { LibraryApp, getShortcutDetails, steamSwitchToDesktop } from "./library";
 

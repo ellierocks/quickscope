@@ -8,6 +8,8 @@
     "watch": "rollup -c -w",
     "typecheck": "tsc --noEmit",
     "test": "python3 -m unittest discover -s tests",
+    "lint": "eslint . && prettier --check . && uvx ruff check . && uvx ruff format --check .",
+    "format": "prettier --write . && uvx ruff check --fix . && uvx ruff format .",
     "package": "rollup -c && python3 scripts/package.py"
   },
   "license": "BSD-3-Clause",
@@ -15,20 +17,20 @@
   "devDependencies": {
     "@decky/rollup": "^1.0.1",
     "@decky/ui": "^4.7.2",
+    "@eslint/js": "^10.0.1",
     "@types/react": "18.3.3",
     "@types/react-dom": "18.3.0",
     "@types/webpack": "^5.28.5",
+    "eslint": "^10.12.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "prettier": "^3.9.9",
     "rollup": "^4.22.5",
-    "typescript": "^5.6.2"
+    "typescript": "^5.6.2",
+    "typescript-eslint": "^8.71.0"
   },
   "dependencies": {
     "@decky/api": "^1.1.2",
     "react-icons": "^5.3.0",
     "tslib": "^2.7.0"
-  },
-  "pnpm": {
-    "peerDependencyRules": {
-      "ignoreMissing": ["react", "react-dom"]
-    }
   }
 }

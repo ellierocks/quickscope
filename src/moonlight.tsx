@@ -28,8 +28,15 @@ export const MOONLIGHT_ROUTE = "/quickscope/moonlight";
 
 // Higher than the screen is fine: Moonlight downscales, which supersamples.
 const RESOLUTIONS: [number, number][] = [
-  [1280, 720], [1280, 800], [1600, 900], [1920, 1080], [1920, 1200],
-  [2560, 1440], [2560, 1600], [3840, 2160], [3840, 2400],
+  [1280, 720],
+  [1280, 800],
+  [1600, 900],
+  [1920, 1080],
+  [1920, 1200],
+  [2560, 1440],
+  [2560, 1600],
+  [3840, 2160],
+  [3840, 2400],
 ];
 const FRAME_RATES = [30, 40, 45, 50, 60, 72, 90, 120];
 
@@ -251,7 +258,8 @@ function MoonlightPage() {
   const setOverride = async (on: boolean) => {
     // Start this display's profile from Moonlight's own settings, so turning
     // the override on changes nothing until a value is edited.
-    if (on && display && !profiles[display.id]) await save({ ...profiles, [display.id]: profileFrom(display, current) });
+    if (on && display && !profiles[display.id])
+      await save({ ...profiles, [display.id]: profileFrom(display, current) });
     setSettings(await setSetting("moonlight_override", on));
   };
 

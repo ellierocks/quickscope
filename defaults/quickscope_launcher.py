@@ -19,6 +19,7 @@ nothing here touches files a SteamOS update replaces.
 
 Standard library only: this runs on the system Python, not Decky's.
 """
+
 import glob
 import json
 import os
@@ -39,6 +40,7 @@ LOG = os.path.join(STATE, "launcher.log")
 KWIN_SCRIPT = os.path.join(STATE, "session.js")
 OSD_SCREEN = os.path.join(STATE, "osd.qml")
 BACKLIGHT_ROOT = "/sys/class/backlight"
+SYSFS_ROOT = "/sys"
 OSD_STATE = os.path.join(STATE, "osd.json")
 LOADING_SCREEN = os.path.join(STATE, "loading.qml")
 SELF = os.path.abspath(__file__)
@@ -92,13 +94,17 @@ DECK_HID_ID = "000028DE:00001205"
 COMBO_STICK_THRESHOLD = 20000
 COMBO_REPEAT_DELAY = 0.35
 COMBO_REPEAT_INTERVAL = 0.12
+COMBO_POLL = 0.02
 
 # Quiet session: KDE's own background helpers are skipped for the launch
 # session. The user's own autostart apps and services (sync clients keeping
 # game saves in sync, etc.) are deliberately left alone.
 QUIET_AUTOSTART = {
-    "baloo_file.desktop", "org.kde.discover.notifier.desktop", "org.kde.kdeconnect.daemon.desktop",
-    "print-applet.desktop", "orca-autostart.desktop",
+    "baloo_file.desktop",
+    "org.kde.discover.notifier.desktop",
+    "org.kde.kdeconnect.daemon.desktop",
+    "print-applet.desktop",
+    "orca-autostart.desktop",
 }
 # The KScreen OSD asks how to use a newly seen display, over the app;
 # Quickscope sets the layout itself.
@@ -314,6 +320,7 @@ LOADING_FALLBACK = 6
 
 # --- helpers -----------------------------------------------------------------
 
+
 def log(msg):
     try:
         os.makedirs(STATE, exist_ok=True)
@@ -392,7 +399,9 @@ def systemctl(*args):
 
 
 def dbus(dest, path, method, *args):
-    result = run(["dbus-send", "--session", "--print-reply", f"--dest={dest}", "--type=method_call", path, method, *args])
+    result = run(
+        ["dbus-send", "--session", "--print-reply", f"--dest={dest}", "--type=method_call", path, method, *args]
+    )
     return result.stdout if succeeded(result) else None
 
 
@@ -528,15 +537,20 @@ class Osd:
         if not qml:
             log("no qml runtime, skipping the on-screen indicator")
             return False
-        write_file(OSD_SCREEN, OSD_QML % {
-            "title": json.dumps(OSD_TITLE),
-            "state_url": json.dumps("file://" + OSD_STATE),
-        })
+        write_file(
+            OSD_SCREEN,
+            OSD_QML
+            % {
+                "title": json.dumps(OSD_TITLE),
+                "state_url": json.dumps("file://" + OSD_STATE),
+            },
+        )
         write_json(OSD_STATE, {"seq": 0, "label": "", "level": 0, "text": ""})
         env = dict(os.environ, QT_WAYLAND_SHELL_INTEGRATION="layer-shell", QML_XHR_ALLOW_FILE_READ="1")
         try:
-            self.proc = subprocess.Popen([qml, OSD_SCREEN], env=env, stdout=subprocess.DEVNULL,
-                                         stderr=subprocess.DEVNULL)
+            self.proc = subprocess.Popen(
+                [qml, OSD_SCREEN], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
         except OSError as e:
             log(f"on-screen indicator failed to start: {e}")
             return False
@@ -566,8 +580,9 @@ class VolumeWatcher:
             return False
         self.last = read_volume()
         try:
-            self.watch = subprocess.Popen(["pactl", "subscribe"], stdout=subprocess.PIPE,
-                                          stderr=subprocess.DEVNULL, text=True)
+            self.watch = subprocess.Popen(
+                ["pactl", "subscribe"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+            )
         except OSError as e:
             log(f"volume indicator failed to start: {e}")
             return False
@@ -584,8 +599,7 @@ class VolumeWatcher:
             if current and current != self.last:
                 self.last = current
                 volume, muted = current
-                self.osd.show("Volume", 0 if muted else min(volume, 100) / 100,
-                              "Muted" if muted else f"{volume}%")
+                self.osd.show("Volume", 0 if muted else min(volume, 100) / 100, "Muted" if muted else f"{volume}%")
 
     def stop(self):
         if self.watch and self.watch.poll() is None:
@@ -661,17 +675,22 @@ class BrightnessCombo(threading.Thread):
         log(f"brightness shortcut reading {node}")
         held, next_step = 0, 0.0
         try:
-            while not self.stopped.is_set():
-                if not select.select([fd], [], [], 0.2)[0]:
-                    continue
+            # The controller reports ~250 times a second. Waking for each costs
+            # about 1% of a core all session, so check every COMBO_POLL and
+            # look only at the newest report.
+            while not self.stopped.wait(COMBO_POLL):
+                report = None
                 try:
-                    report = os.read(fd, 128)
+                    while True:
+                        chunk = os.read(fd, 128)
+                        if is_deck_state_report(chunk):
+                            report = chunk
                 except BlockingIOError:
-                    continue
+                    pass
                 except OSError as e:
                     log(f"brightness shortcut stopped: {e}")
                     return
-                if not is_deck_state_report(report):
+                if report is None:
                     continue
                 direction = combo_direction(report)
                 now = time.monotonic()
@@ -706,7 +725,25 @@ class BrightnessCombo(threading.Thread):
         self.join(timeout=1)
 
 
+def read_power_sysfs(key):
+    """The kernel's own copy of a power setting, in steamosctl's terms, or None.
+    The keeper checks every couple of seconds; a file read is far cheaper than
+    starting steamosctl three times."""
+    if key == "gpu":
+        paths = glob.glob(os.path.join(SYSFS_ROOT, "class/drm/card*/device/power_dpm_force_performance_level"))
+        return read_text(paths[0]) if paths else None
+    if key == "governor":
+        return read_text(os.path.join(SYSFS_ROOT, "devices/system/cpu/cpu0/cpufreq/scaling_governor"))
+    if key == "boost":
+        value = read_text(os.path.join(SYSFS_ROOT, "devices/system/cpu/cpufreq/boost"))
+        return {"1": "enabled", "0": "disabled"}.get(value)
+    return None
+
+
 def get_power_setting(key):
+    value = read_power_sysfs(key)
+    if value:
+        return value
     result = run(["steamosctl", POWER_SETTINGS[key][0]])
     return result.stdout.rsplit(":", 1)[-1].strip() if succeeded(result) else None
 
@@ -735,7 +772,7 @@ def edid_supports_hdr(edid):
     """Whether an EDID's CTA-861 extension has an HDR static metadata block
     listing the PQ (SMPTE ST 2084) transfer function."""
     for start in range(128, len(edid) - 127, 128):
-        block = edid[start:start + 128]
+        block = edid[start : start + 128]
         if block[0] != 0x02:
             continue
         i, end = 4, min(block[2], 127)
@@ -758,8 +795,8 @@ def edid_identity(edid):
     display_id = f"{maker}-{int.from_bytes(edid[10:12], 'little'):04X}"
     name = None
     for offset in (54, 72, 90, 108):
-        if edid[offset:offset + 3] == b"\0\0\0" and edid[offset + 3] == 0xFC:
-            name = edid[offset + 5:offset + 18].split(b"\n")[0].decode("ascii", "replace").strip()
+        if edid[offset : offset + 3] == b"\0\0\0" and edid[offset + 3] == 0xFC:
+            name = edid[offset + 5 : offset + 18].split(b"\n")[0].decode("ascii", "replace").strip()
     return display_id, name or display_id
 
 
@@ -771,8 +808,15 @@ def parse_modetest_connectors(text):
     for line in text.splitlines():
         m = MODETEST_CONNECTOR.match(line)
         if m:
-            current = {"connected": m.group(1) == "connected", "modes": [], "hdr_capable": False, "hdr": False,
-                       "vrr_capable": False, "id": None, "name": None}
+            current = {
+                "connected": m.group(1) == "connected",
+                "modes": [],
+                "hdr_capable": False,
+                "hdr": False,
+                "vrr_capable": False,
+                "id": None,
+                "name": None,
+            }
             connectors[m.group(2)] = current
             in_props = False
             continue
@@ -842,8 +886,11 @@ def display_info():
     crtcs = run(["modetest", "-M", "amdgpu", "-p"])
     if not succeeded(conns):
         return None
-    connectors = {name: c for name, c in parse_modetest_connectors(conns.stdout).items()
-                  if c["connected"] and c["modes"] and not name.startswith("Writeback")}
+    connectors = {
+        name: c
+        for name, c in parse_modetest_connectors(conns.stdout).items()
+        if c["connected"] and c["modes"] and not name.startswith("Writeback")
+    }
     if not connectors:
         return None
     external = [n for n in connectors if not is_internal_connector(n)]
@@ -862,14 +909,12 @@ def display_info():
         "vrr_capable": connectors[target]["vrr_capable"],
         # Stable per display model, for per-display Moonlight settings.
         "id": connectors[target]["id"] or target,
-        "name": ("Built-in screen" if is_internal_connector(target)
-                 else connectors[target]["name"] or target),
+        "name": ("Built-in screen" if is_internal_connector(target) else connectors[target]["name"] or target),
     }
 
 
-def choose_display(pending):
+def choose_display(pending, info):
     """Pick the session's display mode while still in Gaming Mode."""
-    info = display_info()
     if not info:
         return
     forced = pending.get("display_mode")
@@ -886,12 +931,19 @@ def choose_display(pending):
         mode = None
     scale = max(100, min(300, int(pending.get("display_scale", 100)))) / 100
     # External displays always get Gaming Mode's layout (external only).
-    pending["display"] = {"connector": info["connector"], "mode": mode, "hdr": hdr, "scale": scale,
-                          "disable": info["others"] if info["external"] else []}
+    pending["display"] = {
+        "connector": info["connector"],
+        "mode": mode,
+        "hdr": hdr,
+        "scale": scale,
+        "disable": info["others"] if info["external"] else [],
+    }
     write_json(PENDING, pending)
-    log(f"display: {info['connector']} at {mode or 'its default mode'}, scale {scale:g}, "
+    log(
+        f"display: {info['connector']} at {mode or 'its default mode'}, scale {scale:g}, "
         f"HDR {'unsupported' if hdr is None else 'on' if hdr else 'off'}, "
-        f"off: {pending['display']['disable'] or 'nothing'}")
+        f"off: {pending['display']['disable'] or 'nothing'}"
+    )
 
 
 def kscreen_outputs():
@@ -901,7 +953,7 @@ def kscreen_outputs():
     if not succeeded(result):
         return {}
     try:
-        outputs = json.loads(result.stdout[result.stdout.index("{"):])["outputs"]
+        outputs = json.loads(result.stdout[result.stdout.index("{") :])["outputs"]
     except (ValueError, KeyError):
         return {}
     return {
@@ -910,8 +962,10 @@ def kscreen_outputs():
             "mode": str(o.get("currentModeId")),
             "hdr": o.get("hdr"),
             "scale": o.get("scale"),
-            "modes": {mode_name(m["size"]["width"], m["size"]["height"], m["refreshRate"]): str(m["id"])
-                      for m in o.get("modes", [])},
+            "modes": {
+                mode_name(m["size"]["width"], m["size"]["height"], m["refreshRate"]): str(m["id"])
+                for m in o.get("modes", [])
+            },
         }
         for o in outputs
     }
@@ -921,8 +975,7 @@ def display_changes(outputs, display):
     """kscreen-doctor arguments that turn the current outputs into `display`.
     Every change makes a TV re-sync (a second or two of black), so only what
     differs is changed."""
-    args = [f"output.{name}.disable" for name in display["disable"]
-            if outputs.get(name, {}).get("enabled")]
+    args = [f"output.{name}.disable" for name in display["disable"] if outputs.get(name, {}).get("enabled")]
     target = outputs.get(display["connector"], {})
     if not target.get("enabled"):
         args.append(f"output.{display['connector']}.enable")
@@ -949,13 +1002,12 @@ def closest_mode_id(ids, wanted):
     target = parse_mode_name(wanted)
     if not target:
         return None
-    best = None
+    candidates = []
     for name, mode_id in ids.items():
         width, height, refresh = parse_mode_name(name)
         if (width, height) == target[:2] and abs(refresh - target[2]) < 0.05:
-            if best is None or abs(refresh - target[2]) < best[0]:
-                best = (abs(refresh - target[2]), mode_id)
-    return best[1] if best else None
+            candidates.append((abs(refresh - target[2]), mode_id))
+    return min(candidates)[1] if candidates else None
 
 
 def apply_display(display):
@@ -968,8 +1020,11 @@ def apply_display(display):
         log("display already set up as wanted")
         return
     result = run(["kscreen-doctor", *args])
-    log(f"display set: {' '.join(args)}" if succeeded(result)
-        else f"kscreen-doctor failed: {result.stdout.strip() if result else 'not found'}")
+    log(
+        f"display set: {' '.join(args)}"
+        if succeeded(result)
+        else f"kscreen-doctor failed: {result.stdout.strip() if result else 'not found'}"
+    )
 
 
 def backup_output_config():
@@ -995,12 +1050,19 @@ def restore_output_config(entry):
 MOONLIGHT_FLATPAK = "com.moonlight_stream.Moonlight"
 MOONLIGHT_CONF_NAME = os.path.join("Moonlight Game Streaming Project", "Moonlight.conf")
 # Profile field -> Moonlight.conf key in [General].
-MOONLIGHT_KEYS = {"width": "width", "height": "height", "fps": "fps", "bitrate": "bitrate",
-                  "vsync": "vsync", "framepacing": "framepacing", "hdr": "hdr",
-                  # 0 auto, 1 H.264, 2 HEVC, 4 AV1, 5 PyroWave (Nonary's fork).
-                  "codec": "videocfg",
-                  # Nonary's VRR fork only.
-                  "vrr": "enablevrr"}
+MOONLIGHT_KEYS = {
+    "width": "width",
+    "height": "height",
+    "fps": "fps",
+    "bitrate": "bitrate",
+    "vsync": "vsync",
+    "framepacing": "framepacing",
+    "hdr": "hdr",
+    # 0 auto, 1 H.264, 2 HEVC, 4 AV1, 5 PyroWave (Nonary's fork).
+    "codec": "videocfg",
+    # Nonary's VRR fork only.
+    "vrr": "enablevrr",
+}
 # Only Nonary's VRR fork saves this key.
 MOONLIGHT_FORK_KEY = "enablevrr"
 
@@ -1074,12 +1136,12 @@ def moonlight_values(profile):
     return values
 
 
-def override_moonlight(pending):
+def override_moonlight(pending, info):
     """Swap in the user's settings for this display, while still in Gaming
     Mode. Only runs when the user turned the override on and set a profile."""
     if not pending.get("moonlight_override") or not is_moonlight(pending):
         return
-    info = display_info() or {}
+    info = info or {}
     profile = (pending.get("moonlight_profiles") or {}).get(info.get("id"))
     if not profile:
         log(f"no Moonlight settings saved for {info.get('name') or 'this display'}, leaving Moonlight's own")
@@ -1099,8 +1161,7 @@ def override_moonlight(pending):
     if not changes:
         log(f"Moonlight already set up for {info.get('name')}")
         return
-    record_undo("moonlight", {"path": path, "set": changes,
-                              "original": {k: original.get(k) for k in changes}})
+    record_undo("moonlight", {"path": path, "set": changes, "original": {k: original.get(k) for k in changes}})
     write_ini_values(path, changes)
     log(f"Moonlight settings for {info.get('name')}: {changes}")
 
@@ -1153,6 +1214,7 @@ def apply_power_profile(name):
 
 # --- undo bookkeeping --------------------------------------------------------
 
+
 def record_undo(key, value):
     undo = read_json(UNDO) or {}
     undo[key] = value
@@ -1193,6 +1255,7 @@ def restore(reload=True, restart_shell=False):
 
 
 # --- prepare (Gaming Mode, before the switch) --------------------------------
+
 
 def install_unit():
     unit_path = os.path.join(UNIT_DIR, UNIT_NAME)
@@ -1337,18 +1400,17 @@ def prepare():
     # Every launch method either starts Steam itself (Steam games, hybrid) or
     # deliberately runs without it (direct), so desktop Steam's own autostart
     # is never wanted: it would race our Steam or grab the controller.
-    hide_autostart(lambda name, entry, is_user: (
-        is_steam_entry(entry)
-        or (not is_user and name in QUIET_AUTOSTART)
-    ))
+    hide_autostart(lambda name, entry, is_user: is_steam_entry(entry) or (not is_user and name in QUIET_AUTOSTART))
 
     # The splash waits for the Plasma panel, which the session skips, so it
     # would sit there until it times out.
     disable_splash()
 
     choose_brightness(pending)
-    choose_display(pending)
-    override_moonlight(pending)
+    # Read once: modetest is on the launch path.
+    display = display_info()
+    choose_display(pending, display)
+    override_moonlight(pending, display)
 
     masked = []
     for unit in [PLASMASHELL_UNIT, *QUIET_MASKED_UNITS]:
@@ -1368,6 +1430,7 @@ def prepare():
 
 
 # --- launch (inside the desktop session) -------------------------------------
+
 
 def claim_pending():
     """Atomically take the staged launch so the unit and autostart can't both run it."""
@@ -1394,7 +1457,9 @@ def claim_pending():
 def wait_for_kwin():
     deadline = time.monotonic() + KWIN_TIMEOUT
     while time.monotonic() < deadline:
-        out = dbus("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus.NameHasOwner", "string:org.kde.KWin")
+        out = dbus(
+            "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus.NameHasOwner", "string:org.kde.KWin"
+        )
         if out and "boolean true" in out:
             return True
         time.sleep(0.1)
@@ -1404,15 +1469,21 @@ def wait_for_kwin():
 def load_session_script(force_fullscreen, loading):
     """Load the KWin script that fullscreens/activates the app's first window
     and closes the loading screen once that window appears."""
-    script = (SESSION_JS
-              .replace("%LOADING_TITLE%", LOADING_TITLE)
-              .replace("%OSD_TITLE%", OSD_TITLE)
-              .replace("%LOADING_PID%", str(loading.pid if loading else -1))
-              .replace("%FORCE_FULLSCREEN%", "true" if force_fullscreen else "false"))
+    script = (
+        SESSION_JS.replace("%LOADING_TITLE%", LOADING_TITLE)
+        .replace("%OSD_TITLE%", OSD_TITLE)
+        .replace("%LOADING_PID%", str(loading.pid if loading else -1))
+        .replace("%FORCE_FULLSCREEN%", "true" if force_fullscreen else "false")
+    )
     write_file(KWIN_SCRIPT, script)
     dbus("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", f"string:{KWIN_SCRIPT_NAME}")
-    out = dbus("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.loadScript",
-               f"string:{KWIN_SCRIPT}", f"string:{KWIN_SCRIPT_NAME}")
+    out = dbus(
+        "org.kde.KWin",
+        "/Scripting",
+        "org.kde.kwin.Scripting.loadScript",
+        f"string:{KWIN_SCRIPT}",
+        f"string:{KWIN_SCRIPT_NAME}",
+    )
     match = re.search(r"int32 (-?\d+)", out or "")
     if not match or int(match.group(1)) < 0:
         log("could not load KWin session script")
@@ -1433,10 +1504,14 @@ def show_loading_screen(message):
     if not qml:
         log("no qml runtime, skipping loading screen")
         return None
-    write_file(LOADING_SCREEN, LOADING_QML % {
-        "title": json.dumps(LOADING_TITLE),
-        "message": json.dumps(message),
-    })
+    write_file(
+        LOADING_SCREEN,
+        LOADING_QML
+        % {
+            "title": json.dumps(LOADING_TITLE),
+            "message": json.dumps(message),
+        },
+    )
     try:
         return subprocess.Popen([qml, LOADING_SCREEN], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as e:
@@ -1504,7 +1579,7 @@ def steam_command(url=None):
         return ["xdg-open", url]
     else:
         return None
-    return cmd + [url] if url else cmd
+    return [*cmd, url] if url else cmd
 
 
 def start_background_steam():
@@ -1557,8 +1632,9 @@ def request_steam_shutdown():
     if not client:
         return None
     try:
-        subprocess.Popen([client, "-shutdown"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         start_new_session=True)
+        subprocess.Popen(
+            [client, "-shutdown"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True
+        )
     except OSError as e:
         log(f"could not ask Steam to shut down: {e}")
         return None
@@ -1591,8 +1667,10 @@ def launch():
     pending = claim_pending()
     if pending is None:
         return 0
-    log(f"--- {pending.get('name')} ({pending.get('appid')}), mode={pending.get('mode')}, "
-        f"session={os.environ.get('XDG_SESSION_TYPE', '?')}")
+    log(
+        f"--- {pending.get('name')} ({pending.get('appid')}), mode={pending.get('mode')}, "
+        f"session={os.environ.get('XDG_SESSION_TYPE', '?')}"
+    )
 
     # KDE's power management sets its own brightness as the desktop starts.
     brightness_raw = pending.get("brightness_raw")
@@ -1615,8 +1693,9 @@ def launch():
         log("loading screen exited early, starting it again")
         loading = show_loading_screen(starting)
 
-    script = bool((pending.get("force_fullscreen") or loading)
-                  and load_session_script(pending.get("force_fullscreen"), loading))
+    script = bool(
+        (pending.get("force_fullscreen") or loading) and load_session_script(pending.get("force_fullscreen"), loading)
+    )
     if loading and not script:
         # Without the script nothing can tell when the app's window is up.
         timer = threading.Timer(LOADING_FALLBACK, close_loading_screen, [loading])
@@ -1631,8 +1710,9 @@ def launch():
     keeper = None
     if power or brightness_raw is not None:
         hold_for = None if pending.get("lock_brightness") else BRIGHTNESS_SETTLE_TIME
-        keeper = SessionKeeper(power, brightness_raw, hold_for,
-                               auto_profile=profile if chosen == "auto" and power else None)
+        keeper = SessionKeeper(
+            power, brightness_raw, hold_for, auto_profile=profile if chosen == "auto" and power else None
+        )
         keeper.start()
     # Plasma's panel, which the session skips, normally draws the volume
     # indicator; brightness has no control at all outside Gaming Mode.

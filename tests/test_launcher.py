@@ -1,4 +1,5 @@
 """Tests for defaults/quickscope_launcher.py, run against a temporary HOME."""
+
 import importlib.util
 import os
 import pathlib
@@ -47,18 +48,26 @@ class QuietAutostart(LauncherTestCase):
 
     def test_hides_steam_and_kde_helpers_but_never_user_apps(self):
         system = os.path.join(self.sysconf, "autostart")
-        for name, exe in [("baloo_file.desktop", "baloo_file"), ("steam.desktop", "/usr/bin/steam -silent %U"),
-                          ("org.kde.kdeconnect.daemon.desktop", "kdeconnectd"),
-                          ("polkit-kde-authentication-agent-1.desktop", "polkit")]:
+        for name, exe in [
+            ("baloo_file.desktop", "baloo_file"),
+            ("steam.desktop", "/usr/bin/steam -silent %U"),
+            ("org.kde.kdeconnect.daemon.desktop", "kdeconnectd"),
+            ("polkit-kde-authentication-agent-1.desktop", "polkit"),
+        ]:
             self.write_entry(system, name, exe)
         user_app = "com.github.zocker_160.SyncThingy.desktop"
         self.write_entry(self.l.AUTOSTART_DIR, user_app, "flatpak run x")
 
-        hidden = self.l.hide_autostart(lambda name, entry, is_user: (
-            self.l.is_steam_entry(entry) or (not is_user and name in self.l.QUIET_AUTOSTART)))
+        hidden = self.l.hide_autostart(
+            lambda name, entry, is_user: (
+                self.l.is_steam_entry(entry) or (not is_user and name in self.l.QUIET_AUTOSTART)
+            )
+        )
 
-        self.assertEqual(sorted(os.path.basename(h["path"]) for h in hidden),
-                         ["baloo_file.desktop", "org.kde.kdeconnect.daemon.desktop", "steam.desktop"])
+        self.assertEqual(
+            sorted(os.path.basename(h["path"]) for h in hidden),
+            ["baloo_file.desktop", "org.kde.kdeconnect.daemon.desktop", "steam.desktop"],
+        )
         with open(os.path.join(self.l.AUTOSTART_DIR, user_app)) as f:
             self.assertIn("Exec=flatpak", f.read())
         self.l.restore(reload=False)
@@ -131,9 +140,12 @@ class Splash(LauncherTestCase):
 class SessionScript(LauncherTestCase):
     @unittest.skipUnless(shutil.which("node"), "node not installed")
     def test_templated_kwin_script_is_valid_js(self):
-        js = (self.l.SESSION_JS.replace("%LOADING_TITLE%", self.l.LOADING_TITLE)
-              .replace("%OSD_TITLE%", self.l.OSD_TITLE)
-              .replace("%LOADING_PID%", "1234").replace("%FORCE_FULLSCREEN%", "true"))
+        js = (
+            self.l.SESSION_JS.replace("%LOADING_TITLE%", self.l.LOADING_TITLE)
+            .replace("%OSD_TITLE%", self.l.OSD_TITLE)
+            .replace("%LOADING_PID%", "1234")
+            .replace("%FORCE_FULLSCREEN%", "true")
+        )
         self.assertNotIn("%", js)
         path = os.path.join(self.home, "session.js")
         with open(path, "w") as f:
@@ -225,9 +237,20 @@ class Power(LauncherTestCase):
             return subprocess.CompletedProcess(cmd, 0, f"Something: {self.state[key]}\n")
 
         self.l.run = fake_run
+        # Read through the fake too, not the test machine's real sysfs.
+        self.l.SYSFS_ROOT = os.path.join(self.home, "no-sysfs")
         real_which = shutil.which
         shutil.which = lambda name: "/usr/bin/" + name
         self.addCleanup(setattr, shutil, "which", real_which)
+
+    def test_sysfs_is_read_in_steamosctl_terms(self):
+        root = self.l.SYSFS_ROOT
+        self.l.write_file(os.path.join(root, "class/drm/card0/device/power_dpm_force_performance_level"), "high\n")
+        self.l.write_file(os.path.join(root, "devices/system/cpu/cpu0/cpufreq/scaling_governor"), "powersave\n")
+        self.l.write_file(os.path.join(root, "devices/system/cpu/cpufreq/boost"), "0\n")
+        self.assertEqual(
+            [self.l.get_power_setting(k) for k in ("gpu", "governor", "boost")], ["high", "powersave", "disabled"]
+        )
 
     def test_battery_profile_applies_and_restores(self):
         applied = self.l.apply_power_profile("battery")
@@ -275,19 +298,28 @@ class Power(LauncherTestCase):
 
 # EDID of a Samsung 4K HDR TV, as `modetest -c` prints it.
 TV_EDID = [
-    "00ffffffffffff004c2db571000e0001", "011f0103806639780aa833ab5045a527",
-    "0d4848bdef80714f81c0810081809500", "a9c0b300d1c0e2d1008cf0705a806808",
-    "8a00501d7400001e565e00a0a0a02950", "30203500501d7400001a000000fd0018",
-    "4b0f873c000a202020202020000000fc", "0053414d53554e470a2020202020015e",
-    "02035cf05661661f041313132021225d", "5e5f6065666264646403122f09070709",
-    "070709070709070709070783010000e2", "004fe305c3016e030c001000903c2800",
-    "800102030468d85dc40178800900e306", "0d01e30f0300e5018b849001023a8018",
-    "71382d40582c450000000000001e0000", "00000000000000000000000000000037",
+    "00ffffffffffff004c2db571000e0001",
+    "011f0103806639780aa833ab5045a527",
+    "0d4848bdef80714f81c0810081809500",
+    "a9c0b300d1c0e2d1008cf0705a806808",
+    "8a00501d7400001e565e00a0a0a02950",
+    "30203500501d7400001a000000fd0018",
+    "4b0f873c000a202020202020000000fc",
+    "0053414d53554e470a2020202020015e",
+    "02035cf05661661f041313132021225d",
+    "5e5f6065666264646403122f09070709",
+    "070709070709070709070783010000e2",
+    "004fe305c3016e030c001000903c2800",
+    "800102030468d85dc40178800900e306",
+    "0d01e30f0300e5018b849001023a8018",
+    "71382d40582c450000000000001e0000",
+    "00000000000000000000000000000037",
 ]
 
 # Trimmed `modetest -c` / `-p` output from a docked Deck LCD on a 4K TV, with
 # Gamescope outputting HDR.
-MODETEST_CONNECTORS = """\
+MODETEST_CONNECTORS = (
+    """\
 Connectors:
 id\tencoder\tstatus\t\tname\t\tsize (mm)\tmodes\tencoders
 135\t0\tconnected\teDP-1          \t100x150\t\t2\t134
@@ -309,13 +341,16 @@ id\tencoder\tstatus\t\tname\t\tsize (mm)\tmodes\tencoders
 \t\tblobs:
 
 \t\tvalue:
-""" + "".join(f"\t\t\t{row}\n" for row in TV_EDID) + """\
+"""
+    + "".join(f"\t\t\t{row}\n" for row in TV_EDID)
+    + """\
 \t148 Colorspace:
 \t\tflags: enum
 \t\tenums: Default=0 BT709_YCC=2 opRGB=7 BT2020_RGB=9 BT2020_YCC=10
 \t\tvalue: 9
 150\t0\tdisconnected\tHDMI-A-1       \t0x0\t\t0\t149
 """
+)
 MODETEST_CRTCS = """\
 CRTCs:
 id\tfb\tpos\tsize
@@ -353,6 +388,7 @@ class Display(LauncherTestCase):
         def fake_run(cmd):
             out = connectors if cmd[-1] == "-c" else crtcs
             return subprocess.CompletedProcess(cmd, 0, out)
+
         self.l.run = fake_run
         real_which = shutil.which
         shutil.which = lambda name: "/usr/bin/" + name
@@ -363,29 +399,32 @@ class Display(LauncherTestCase):
         info = self.l.display_info()
         self.assertEqual((info["connector"], info["external"], info["current"]), ("DP-1", True, "3840x2160@60.00"))
         pending = {}
-        self.l.choose_display(pending)
-        self.assertEqual(pending["display"], {"connector": "DP-1", "mode": "3840x2160@60.00", "hdr": True,
-                                              "scale": 1.0, "disable": ["eDP-1"]})
+        self.l.choose_display(pending, self.l.display_info())
+        self.assertEqual(
+            pending["display"],
+            {"connector": "DP-1", "mode": "3840x2160@60.00", "hdr": True, "scale": 1.0, "disable": ["eDP-1"]},
+        )
 
     def test_forced_mode_and_fallback(self):
         self.fake_modetest()
         pending = {"display_mode": "1920x1080@59.94"}
-        self.l.choose_display(pending)
+        self.l.choose_display(pending, self.l.display_info())
         self.assertEqual((pending["display"]["mode"], pending["display"]["hdr"]), ("1920x1080@59.94", False))
         pending = {"display_mode": "1920x1080@59.94", "display_hdr": True}
-        self.l.choose_display(pending)
+        self.l.choose_display(pending, self.l.display_info())
         self.assertTrue(pending["display"]["hdr"])
         pending = {"display_mode": "2560x1440@144.00"}
-        self.l.choose_display(pending)
+        self.l.choose_display(pending, self.l.display_info())
         self.assertEqual(pending["display"]["mode"], "3840x2160@60.00")
 
     def test_handheld_lcd_only_gets_a_scale(self):
         lcd_only = MODETEST_CONNECTORS.split("145\t144")[0]
         self.fake_modetest(lcd_only, MODETEST_CRTCS.replace("3840x2160 60.00", "800x1280 60.00"))
         pending = {"display_scale": 150}
-        self.l.choose_display(pending)
-        self.assertEqual(pending["display"], {"connector": "eDP-1", "mode": None, "hdr": None,
-                                              "scale": 1.5, "disable": []})
+        self.l.choose_display(pending, self.l.display_info())
+        self.assertEqual(
+            pending["display"], {"connector": "eDP-1", "mode": None, "hdr": None, "scale": 1.5, "disable": []}
+        )
 
     def test_closest_kscreen_mode(self):
         ids = {"3840x2160@60.00": "1", "3840x2160@59.94": "2", "1920x1080@60.00": "3"}
@@ -401,8 +440,10 @@ class Display(LauncherTestCase):
         display = {"connector": "DP-1", "mode": "3840x2160@60.00", "disable": ["eDP-1"]}
         self.assertEqual(self.l.display_changes(outputs, display), [])
         outputs["DP-1"]["hdr"] = False
-        self.assertEqual(self.l.display_changes(outputs, dict(display, hdr=True)),
-                         ["output.DP-1.hdr.enable", "output.DP-1.wcg.enable"])
+        self.assertEqual(
+            self.l.display_changes(outputs, dict(display, hdr=True)),
+            ["output.DP-1.hdr.enable", "output.DP-1.wcg.enable"],
+        )
         self.assertEqual(self.l.display_changes(outputs, dict(display, hdr=False)), [])
         outputs["DP-1"]["scale"] = 1.7
         self.assertEqual(self.l.display_changes(outputs, dict(display, scale=1.0)), ["output.DP-1.scale.1"])
@@ -410,8 +451,7 @@ class Display(LauncherTestCase):
         display["mode"] = "1920x1080@60.00"
         self.assertEqual(self.l.display_changes(outputs, display), ["output.DP-1.mode.18"])
         outputs["eDP-1"]["enabled"] = True
-        self.assertEqual(self.l.display_changes(outputs, display),
-                         ["output.eDP-1.disable", "output.DP-1.mode.18"])
+        self.assertEqual(self.l.display_changes(outputs, display), ["output.eDP-1.disable", "output.DP-1.mode.18"])
 
     def test_output_config_restored(self):
         self.l.write_file(self.l.KWIN_OUTPUT_CONFIG, "original")
@@ -442,15 +482,31 @@ class Moonlight(LauncherTestCase):
     def setUp(self):
         super().setUp()
         self.fake_modetest()
-        self.conf = os.path.join(self.home, ".var", "app", "com.moonlight_stream.Moonlight", "config",
-                                 "Moonlight Game Streaming Project", "Moonlight.conf")
+        self.conf = os.path.join(
+            self.home,
+            ".var",
+            "app",
+            "com.moonlight_stream.Moonlight",
+            "config",
+            "Moonlight Game Streaming Project",
+            "Moonlight.conf",
+        )
         self.l.write_file(self.conf, MOONLIGHT_CONF)
         self.pending = {
             "command": "/usr/bin/flatpak run com.moonlight_stream.Moonlight",
             "moonlight_override": True,
-            "moonlight_profiles": {"SAM-71B5": {"name": "SAMSUNG", "width": 3840, "height": 2160, "fps": 60,
-                                                "vsync": False, "framepacing": False,
-                                                "bitrate": 80000, "hdr": True}},
+            "moonlight_profiles": {
+                "SAM-71B5": {
+                    "name": "SAMSUNG",
+                    "width": 3840,
+                    "height": 2160,
+                    "fps": 60,
+                    "vsync": False,
+                    "framepacing": False,
+                    "bitrate": 80000,
+                    "hdr": True,
+                }
+            },
         }
 
     def conf_values(self):
@@ -462,17 +518,19 @@ class Moonlight(LauncherTestCase):
         self.assertEqual((info["id"], info["name"]), ("SAM-71B5", "SAMSUNG"))
 
     def test_override_and_restore(self):
-        self.l.override_moonlight(self.pending)
+        self.l.override_moonlight(self.pending, self.l.display_info())
         values = self.conf_values()
-        self.assertEqual((values["width"], values["height"], values["vsync"], values["framepacing"]),
-                         ("3840", "2160", "false", "false"))
+        self.assertEqual(
+            (values["width"], values["height"], values["vsync"], values["framepacing"]),
+            ("3840", "2160", "false", "false"),
+        )
         self.assertEqual((values["bitrate"], values["hdr"]), ("80000", "true"))
         self.l.restore(reload=False)
         with open(self.conf) as f:
             self.assertEqual(f.read(), MOONLIGHT_CONF)
 
     def test_overridden_keys_ignore_changes_made_in_moonlight(self):
-        self.l.override_moonlight(self.pending)
+        self.l.override_moonlight(self.pending, self.l.display_info())
         # Changed in Moonlight during the session: one overridden key, one not.
         self.l.write_ini_values(self.conf, {"bitrate": "23000", "mdns": "false"})
         self.l.restore(reload=False)
@@ -485,14 +543,14 @@ class Moonlight(LauncherTestCase):
     def test_fork_only_settings_skip_upstream_moonlight(self):
         profile = self.pending["moonlight_profiles"]["SAM-71B5"]
         profile.update(codec=5, vrr=True)
-        self.l.override_moonlight(self.pending)
+        self.l.override_moonlight(self.pending, self.l.display_info())
         values = self.conf_values()
         self.assertNotIn("enablevrr", values)
         self.assertNotIn("videocfg", values)
         self.l.restore(reload=False)
         # With the fork's key present, both are applied.
         self.l.write_ini_values(self.conf, {"enablevrr": "false", "videocfg": "2"})
-        self.l.override_moonlight(self.pending)
+        self.l.override_moonlight(self.pending, self.l.display_info())
         values = self.conf_values()
         self.assertEqual((values["enablevrr"], values["videocfg"]), ("true", "5"))
 
@@ -503,10 +561,12 @@ class Moonlight(LauncherTestCase):
         self.assertEqual(self.l.moonlight_conf({"command": "/opt/moonlight/moonlight"}), native)
 
     def test_nothing_changes_without_the_toggle_or_a_profile(self):
-        for pending in (dict(self.pending, moonlight_override=False),
-                        dict(self.pending, moonlight_profiles={}),
-                        dict(self.pending, command="/usr/bin/retroarch")):
-            self.l.override_moonlight(pending)
+        for pending in (
+            dict(self.pending, moonlight_override=False),
+            dict(self.pending, moonlight_profiles={}),
+            dict(self.pending, command="/usr/bin/retroarch"),
+        ):
+            self.l.override_moonlight(pending, self.l.display_info())
             with open(self.conf) as f:
                 self.assertEqual(f.read(), MOONLIGHT_CONF)
 
@@ -566,7 +626,9 @@ class Uninstall(LauncherTestCase):
         self.l.write_file(self.l.LOG, "log\n")
         self.l.uninstall()
         self.assertFalse(os.path.exists(os.path.join(self.l.UNIT_DIR, self.l.UNIT_NAME)))
-        self.assertFalse(os.path.lexists(os.path.join(self.l.UNIT_DIR, f"{self.l.UNIT_TARGET}.wants", self.l.UNIT_NAME)))
+        self.assertFalse(
+            os.path.lexists(os.path.join(self.l.UNIT_DIR, f"{self.l.UNIT_TARGET}.wants", self.l.UNIT_NAME))
+        )
         self.assertFalse(os.path.exists(self.l.STATE))
 
 

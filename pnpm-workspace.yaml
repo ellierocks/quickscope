@@ -1,0 +1,5 @@
+peerDependencyRules:
+  # Steam's UI provides React at runtime.
+  ignoreMissing:
+    - react
+    - react-dom

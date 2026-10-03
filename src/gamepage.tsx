@@ -6,18 +6,21 @@
 // below it are lost on re-render. The page component above it is a plain memo
 // component and patches reliably. Every step is guarded: if Steam's layout
 // changes, the button is simply not added.
+//
+// Steam's React tree is walked and patched as-is; it has no types.
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { routerHook } from "@decky/api";
 import { DialogButton, afterPatch, appDetailsClasses, findInReactTree, wrapReactType } from "@decky/ui";
 import { useState } from "react";
 import { FaCrosshairs } from "react-icons/fa";
 
 import { launch, toast } from "./launch";
-import { isLaunchable, toLibraryApp } from "./library";
+import { AppOverview, isLaunchable, toLibraryApp } from "./library";
 
 const ROUTE = "/library/app/:appid";
 const BUTTON_KEY = "quickscope-launch";
 
-function QuickscopeButton({ overview }: { overview: any }) {
+function QuickscopeButton({ overview }: { overview: AppOverview }) {
   const [busy, setBusy] = useState(false);
   const onClick = async () => {
     const app = toLibraryApp(overview);
@@ -59,13 +62,16 @@ function QuickscopeButton({ overview }: { overview: any }) {
   );
 }
 
-function injectButton(pageTree: any, overview: any) {
+function injectButton(pageTree: any, overview: AppOverview | undefined) {
   if (!overview || !isLaunchable(overview)) return;
   const innerClass = appDetailsClasses?.InnerContainer;
   if (!innerClass) return;
   const inner = findInReactTree(
     pageTree,
-    (x: any) => Array.isArray(x?.props?.children) && typeof x?.props?.className === "string" && x.props.className.includes(innerClass),
+    (x: any) =>
+      Array.isArray(x?.props?.children) &&
+      typeof x?.props?.className === "string" &&
+      x.props.className.includes(innerClass),
   );
   const children: any[] | undefined = inner?.props?.children;
   if (!children || children.some((c) => c?.key === BUTTON_KEY)) return;

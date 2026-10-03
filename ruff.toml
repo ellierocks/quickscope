@@ -1,0 +1,13 @@
+# main.py runs on Decky's bundled Python, the launcher on SteamOS's own.
+target-version = "py311"
+line-length = 120
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PIE", "PERF", "RET"]
+ignore = [
+    "SIM105",  # contextlib.suppress reads worse than try/except/pass here
+    "RUF001",  # "…" and "×" in user-facing strings are intentional
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["B011"]

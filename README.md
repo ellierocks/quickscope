@@ -128,6 +128,8 @@ Steam is started as `/usr/lib/steam/steam -steamdeck -silent -noverifyfiles -ski
 ```sh
 pnpm install
 pnpm typecheck
+pnpm lint       # ESLint, Prettier and Ruff (Ruff runs through uvx)
+pnpm format     # fix what lint can fix
 pnpm test       # Python unit tests (backend + launcher)
 pnpm package    # build out/Quickscope.zip
 ```
