@@ -94,6 +94,29 @@ export function getShortcutDetails(appid: number, timeoutMs = 3000): Promise<Sho
   });
 }
 
+/** Steam's current screen brightness as a percentage, or null if unavailable. */
+export function getSteamBrightness(timeoutMs = 1000): Promise<number | null> {
+  return new Promise((resolve) => {
+    let done = false;
+    let registration: { unregister?: () => void } | undefined;
+    const finish = (value: number | null) => {
+      if (done) return;
+      done = true;
+      registration?.unregister?.();
+      resolve(value);
+    };
+    try {
+      registration = w.SteamClient.System.Display.RegisterForBrightnessChanges((b: any) =>
+        finish(typeof b?.flBrightness === "number" ? Math.round(b.flBrightness * 100) : null),
+      );
+      if (done) registration?.unregister?.();
+    } catch {
+      finish(null);
+    }
+    setTimeout(() => finish(null), timeoutMs);
+  });
+}
+
 /** Steam's own "Switch to Desktop", if this client exposes it. */
 export function steamSwitchToDesktop(): boolean {
   const fn = w.SteamClient?.System?.SwitchToDesktop;

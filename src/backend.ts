@@ -7,6 +7,10 @@ export interface Settings {
   minimal_desktop: boolean;
   loading_screen: boolean;
   performance: boolean;
+  lock_brightness: boolean;
+  match_gaming_brightness: boolean;
+  brightness_pct: number;
+  volume_osd: boolean;
   favorites: number[];
   launch_modes: Record<string, ShortcutMode>;
 }

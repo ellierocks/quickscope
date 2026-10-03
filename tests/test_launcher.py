@@ -131,6 +131,7 @@ class SessionScript(LauncherTestCase):
     @unittest.skipUnless(shutil.which("node"), "node not installed")
     def test_templated_kwin_script_is_valid_js(self):
         js = (self.l.SESSION_JS.replace("%LOADING_TITLE%", self.l.LOADING_TITLE)
+              .replace("%OSD_TITLE%", self.l.OSD_TITLE)
               .replace("%LOADING_PID%", "1234").replace("%FORCE_FULLSCREEN%", "true"))
         self.assertNotIn("%", js)
         path = os.path.join(self.home, "session.js")
@@ -138,6 +139,60 @@ class SessionScript(LauncherTestCase):
             f.write(js)
         result = subprocess.run(["node", "--check", path], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class Brightness(LauncherTestCase):
+    def setUp(self):
+        super().setUp()
+        self.l.BACKLIGHT_ROOT = os.path.join(self.home, "backlight")
+        self.dev = os.path.join(self.l.BACKLIGHT_ROOT, "amdgpu_bl0")
+        self.l.write_file(os.path.join(self.dev, "max_brightness"), "65535\n")
+        self.set_raw(17011)
+
+    def set_raw(self, raw):
+        self.l.write_file(os.path.join(self.dev, "brightness"), f"{raw}\n")
+
+    def raw(self):
+        return self.l.read_backlight()[0]
+
+    def test_curve_matches_steam_measurements(self):
+        # Measured on a Deck LCD: Steam 100% -> 65535, Steam 48% -> 17011.
+        self.assertEqual(self.l.brightness_pct_to_raw(100, 65535), 65535)
+        self.assertAlmostEqual(self.l.brightness_pct_to_raw(48, 65535), 17011, delta=400)
+        self.assertGreaterEqual(self.l.brightness_pct_to_raw(0, 65535), 1)
+
+    def test_match_gaming_mode_locks_current_level_and_restores(self):
+        pending = {"lock_brightness": True, "match_gaming_brightness": True}
+        self.l.lock_brightness(pending)
+        self.assertEqual(pending["brightness_raw"], 17011)
+        self.set_raw(40000)  # KDE changed it during the session
+        self.l.restore(reload=False)
+        self.assertEqual(self.raw(), 17011)
+
+    def test_custom_level(self):
+        pending = {"lock_brightness": True, "match_gaming_brightness": False, "brightness_pct": 100}
+        self.l.lock_brightness(pending)
+        self.assertEqual(pending["brightness_raw"], 65535)
+
+    def test_no_backlight_is_harmless(self):
+        self.l.BACKLIGHT_ROOT = os.path.join(self.home, "nothing")
+        pending = {"lock_brightness": True}
+        self.l.lock_brightness(pending)
+        self.assertNotIn("brightness_raw", pending)
+        self.assertFalse(self.l.write_backlight(100))
+
+
+class Volume(LauncherTestCase):
+    def test_parse(self):
+        out = "Volume: front-left: 32768 /  50% / -18.06 dB,   front-right: 32768 /  50% / -18.06 dB\n"
+        self.assertEqual(self.l.parse_volume(out, "Mute: no\n"), (50, False))
+        self.assertEqual(self.l.parse_volume(out, "Mute: yes\n"), (50, True))
+        self.assertIsNone(self.l.parse_volume("", "Mute: no"))
+
+    def test_osd_qml_is_filled_in(self):
+        qml = self.l.OSD_QML % {"title": '"t"', "state_url": '"file:///x"'}
+        self.assertIn('osd.volume + "%"', qml)
+        self.assertNotIn("%(", qml)
 
 
 class LogTrim(LauncherTestCase):

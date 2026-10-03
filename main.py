@@ -17,6 +17,13 @@ SETTINGS_DEFAULTS = {
     "loading_screen": True,
     # GPU clocks high and the performance CPU governor; costs battery.
     "performance": True,
+    # Hold the screen at one brightness for the session (there's no Quick
+    # Access menu to change it): Gaming Mode's level, or brightness_pct.
+    "lock_brightness": True,
+    "match_gaming_brightness": True,
+    "brightness_pct": 50,
+    # Our own volume indicator when the minimal desktop skips Plasma's.
+    "volume_osd": True,
     "favorites": [],
     # Per-shortcut overrides, {"<appid>": "direct"}. Shortcuts default to
     # "hybrid" (launched directly, desktop Steam started alongside for its
@@ -240,7 +247,9 @@ class Plugin:
     async def set_setting(self, key, value):
         if key not in SETTINGS_DEFAULTS:
             raise ValueError(f"Unknown setting: {key}")
-        if key == "favorites":
+        if key == "brightness_pct":
+            value = max(5, min(100, int(value)))
+        elif key == "favorites":
             value = [int(v) for v in value]
         elif key == "launch_modes":
             value = {str(int(k)): v for k, v in value.items() if v in LAUNCH_MODES}
@@ -297,6 +306,10 @@ class Plugin:
                 # Opinionated session tuning; Quickscope owns this session.
                 "quiet_session": True,
                 "performance": s["performance"],
+                "lock_brightness": s["lock_brightness"],
+                "match_gaming_brightness": s["match_gaming_brightness"],
+                "brightness_pct": s["brightness_pct"],
+                "volume_osd": s["volume_osd"],
             }
 
             path = _paths()["pending"]

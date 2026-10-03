@@ -3,6 +3,7 @@ import {
   DialogButton,
   PanelSection,
   PanelSectionRow,
+  SliderField,
   TextField,
   ToggleField,
   staticClasses,
@@ -21,7 +22,7 @@ import {
 } from "./backend";
 import { patchGamePage } from "./gamepage";
 import { MODE_NAMES, effectiveMode, launch, toast } from "./launch";
-import { LibraryApp, getLibraryApps } from "./library";
+import { LibraryApp, getLibraryApps, getSteamBrightness } from "./library";
 
 const RECENT_COUNT = 8;
 const SEARCH_COUNT = 20;
@@ -231,6 +232,55 @@ function Content() {
             description="Keep GPU and CPU at full speed while the app runs. Uses more battery."
             checked={settings.performance}
             onChange={(v) => update("performance", v)}
+          />
+        </PanelSectionRow>
+      </PanelSection>
+
+      <PanelSection title="Display & audio">
+        <PanelSectionRow>
+          <ToggleField
+            label="Lock brightness"
+            description="Hold the screen at one brightness while the app runs; there's no Quick Access menu to change it."
+            checked={settings.lock_brightness}
+            onChange={(v) => update("lock_brightness", v)}
+          />
+        </PanelSectionRow>
+        {settings.lock_brightness && (
+          <PanelSectionRow>
+            <ToggleField
+              label="Match Gaming Mode"
+              description="Use the brightness you had when launching."
+              checked={settings.match_gaming_brightness}
+              onChange={async (v) => {
+                // Start the slider at the current brightness.
+                if (!v) {
+                  const current = await getSteamBrightness();
+                  if (current !== null) await update("brightness_pct", Math.max(5, current));
+                }
+                update("match_gaming_brightness", v);
+              }}
+            />
+          </PanelSectionRow>
+        )}
+        {settings.lock_brightness && !settings.match_gaming_brightness && (
+          <PanelSectionRow>
+            <SliderField
+              label="Brightness"
+              value={settings.brightness_pct}
+              min={5}
+              max={100}
+              step={5}
+              showValue
+              onChange={(v) => update("brightness_pct", v)}
+            />
+          </PanelSectionRow>
+        )}
+        <PanelSectionRow>
+          <ToggleField
+            label="Volume indicator"
+            description="Show the volume when you press the volume buttons. Plasma's panel usually does this, but the minimal desktop skips it."
+            checked={settings.volume_osd}
+            onChange={(v) => update("volume_osd", v)}
           />
         </PanelSectionRow>
       </PanelSection>
