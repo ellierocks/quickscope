@@ -5,7 +5,7 @@ Moonlight's own end-of-stream statistics ("Global video stats"), taken from the 
 ## Setup
 
 - **Client:** Steam Deck LCD (1280×800, 60 Hz, no VRR), SteamOS 3.9.2, Plasma 6.7, Moonlight 6.1.0 (fork with PyroWave support) as a Flatpak, Moonlight settings unchanged between runs: 1920×1200, 60 FPS, **V-Sync on**
-- **Host:** Sunshine, streaming *Batman: Arkham Knight*, over 5 GHz Wi-Fi
+- **Host:** a Sunshine-based server with PyroWave support, streaming *Batman: Arkham Knight* to the Deck over 5 GHz Wi-Fi
 - **Environments:**
   - Gaming Mode (Gamescope)
   - Quickscope on KWin Wayland (the default)
