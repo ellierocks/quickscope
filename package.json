@@ -1,14 +1,17 @@
 {
   "name": "quickscope",
   "version": "0.1.0",
-  "description": "Decky Loader plugin: launch games outside Gamescope for lower latency",
+  "description": "Decky Loader plugin: launch games and Moonlight outside Gamescope for lower latency",
   "type": "module",
   "scripts": {
     "build": "rollup -c",
     "watch": "rollup -c -w",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "python3 -m unittest discover -s tests",
+    "package": "rollup -c && python3 scripts/package.py"
   },
   "license": "BSD-3-Clause",
+  "packageManager": "pnpm@12.8.1",
   "devDependencies": {
     "@decky/rollup": "^1.0.1",
     "@decky/ui": "^4.7.2",

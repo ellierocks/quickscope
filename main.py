@@ -54,6 +54,9 @@ SHORTCUT_GAMEID_FLAG = 0x02000000
 
 LAUNCHER_TIMEOUT = 30
 
+# Must match UNIT_NAME in quickscope_launcher.py.
+LAUNCH_UNIT = "quickscope-launch.service"
+
 GAMESCOPE_UNIT = "gamescope-session.service"
 # Normal Gamescope stops take ~1-2.2 s on the Deck; its unit's own timeout is 10 s.
 GAMESCOPE_STOP_GRACE = 3
@@ -75,7 +78,6 @@ def _paths():
         "state": state,
         "pending": os.path.join(state, "pending.json"),
         "launcher": os.path.join(state, "quickscope_launcher.py"),
-        "log": os.path.join(state, "launcher.log"),
     }
 
 
@@ -277,7 +279,6 @@ class Plugin:
             "session_select": (_which("steamosctl") or _which("steamos-session-select")) is not None,
             "launcher_found": _launcher_source() is not None,
             "pending": os.path.exists(_paths()["pending"]),
-            "log_path": _paths()["log"],
         }
 
     async def prepare_launch(self, spec):
@@ -388,7 +389,11 @@ class Plugin:
             _install_launcher()
         except OSError as e:
             decky.logger.warning(f"Could not install launcher: {e}")
-        if not _pending_is_fresh():
+        # Undo leftovers from an interrupted launch, unless a Quickscope
+        # session is running right now (Decky restarted underneath it): its
+        # tweaks are live and the launcher undoes them when the app exits.
+        _, unit_state = await _systemctl_user("is-active", LAUNCH_UNIT)
+        if unit_state != "active" and not _pending_is_fresh():
             await self._cleanup()
         decky.logger.info("Quickscope loaded")
 

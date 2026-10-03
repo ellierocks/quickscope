@@ -4,8 +4,8 @@
   "flags": [],
   "api_version": 1,
   "publish": {
-    "tags": ["gaming", "moonlight", "latency", "desktop"],
-    "description": "Launch any Steam or non-Steam game outside Gamescope (via the desktop session) for a lower-latency display path, then drop back into Gaming Mode when it exits.",
+    "tags": ["moonlight", "streaming", "latency", "desktop"],
+    "description": "Launch Moonlight or any game outside Gamescope in a stripped-down, low-latency desktop session, and return to Gaming Mode when it exits.",
     "image": ""
   }
 }

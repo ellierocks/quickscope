@@ -32,7 +32,7 @@ STATE = os.path.join(HOME, ".local", "state", "quickscope")
 PENDING = os.path.join(STATE, "pending.json")
 UNDO = os.path.join(STATE, "undo.json")
 LOG = os.path.join(STATE, "launcher.log")
-KWIN_SCRIPT = os.path.join(STATE, "fullscreen.js")
+KWIN_SCRIPT = os.path.join(STATE, "session.js")
 LOADING_SCREEN = os.path.join(STATE, "loading.qml")
 SELF = os.path.abspath(__file__)
 
@@ -43,7 +43,7 @@ UNIT_NAME = "quickscope-launch.service"
 UNIT_TARGET = "plasma-core.target"
 PLASMASHELL_UNIT = "plasma-plasmashell.service"
 KSPLASH_UNIT = "plasma-ksplash.service"
-KWIN_SCRIPT_NAME = "quickscope-fullscreen"
+KWIN_SCRIPT_NAME = "quickscope-session"
 STEAM_FAST_START_ARGS = ["-silent", "-noverifyfiles", "-skipinitialbootstrap", "-norepairfiles"]
 STEAMOS_CLIENT = "/usr/lib/steam/steam"
 HYBRID_STEAM_DELAY = 1
@@ -114,8 +114,9 @@ Name=Hidden by Quickscope
 Hidden=true
 """
 
-# Fullscreen the first real app window that opens, then disconnect.
-FULLSCREEN_JS = """\
+# KWin script: when the app's first real window opens, fullscreen and focus it,
+# close the loading screen, then disconnect.
+SESSION_JS = """\
 // Steam on Wayland triggers a screen-share portal dialog at startup; never
 // fullscreen that or any other system prompt.
 var ignored = ["steam", "steamwebhelper", "plasmashell", "org.kde.plasmashell",
@@ -380,8 +381,7 @@ def restore(reload=True, restart_shell=False):
     """Undo every one-shot tweak recorded in undo.json. Safe to run repeatedly."""
     undo = read_json(UNDO) or {}
     remove(UNDO)
-    # "steam_autostart" is the pre-0.2 name for "hidden_autostart".
-    for entry in undo.get("hidden_autostart", []) + undo.get("steam_autostart", []):
+    for entry in undo.get("hidden_autostart", []):
         remove(entry["path"])
         if entry.get("backup") and os.path.exists(entry["backup"]):
             os.replace(entry["backup"], entry["path"])
@@ -604,7 +604,7 @@ def resume_compositing():
 def load_session_script(force_fullscreen, loading):
     """Load the KWin script that fullscreens/activates the app's first window
     and closes the loading screen once that window appears."""
-    script = (FULLSCREEN_JS
+    script = (SESSION_JS
               .replace("%LOADING_TITLE%", LOADING_TITLE)
               .replace("%LOADING_PID%", str(loading.pid if loading else -1))
               .replace("%FORCE_FULLSCREEN%", "true" if force_fullscreen else "false"))
@@ -614,20 +614,21 @@ def load_session_script(force_fullscreen, loading):
                f"string:{KWIN_SCRIPT}", f"string:{KWIN_SCRIPT_NAME}")
     match = re.search(r"int32 (-?\d+)", out or "")
     if not match or int(match.group(1)) < 0:
-        log("could not load KWin fullscreen script")
+        log("could not load KWin session script")
         return False
     script_id = match.group(1)
     # Plasma 6 path first, Plasma 5 second.
     for path in (f"/Scripting/Script{script_id}", f"/{script_id}"):
         if dbus("org.kde.KWin", path, "org.kde.kwin.Script.run") is not None:
-            log("KWin fullscreen script running")
+            log("KWin session script running")
             return True
-    log("could not run KWin fullscreen script")
+    log("could not run KWin session script")
     return False
 
 
 def show_loading_screen(name):
-    """Cover the black desktop while Steam starts. Returns the process or None."""
+    """Cover the black screen until the app's window appears. Returns the
+    process or None."""
     qml = shutil.which("qml6") or shutil.which("qml")
     if not qml:
         log("no qml runtime, skipping loading screen")
@@ -653,7 +654,7 @@ def close_loading_screen(proc):
         proc.kill()
 
 
-def unload_fullscreen_script():
+def unload_session_script():
     dbus("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", f"string:{KWIN_SCRIPT_NAME}")
 
 
@@ -807,7 +808,7 @@ def launch():
         if suspended:
             resume_compositing()
         if script:
-            unload_fullscreen_script()
+            unload_session_script()
         # Undo before returning: the logout ends this process.
         restore(restart_shell=not returning)
 
@@ -817,11 +818,13 @@ def launch():
 
 
 def uninstall():
+    """Undo everything and remove every file Quickscope created."""
     restore(reload=False)
-    remove(PENDING)
     remove(os.path.join(UNIT_DIR, f"{UNIT_TARGET}.wants", UNIT_NAME))
     remove(os.path.join(UNIT_DIR, UNIT_NAME))
     systemctl("daemon-reload")
+    # Includes this script's own copy, the log and generated files.
+    shutil.rmtree(STATE, ignore_errors=True)
 
 
 def main(argv):

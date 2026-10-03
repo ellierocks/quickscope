@@ -24,7 +24,6 @@ export interface Environment {
   session_select: boolean;
   launcher_found: boolean;
   pending: boolean;
-  log_path: string;
 }
 
 export interface LaunchSpec {
