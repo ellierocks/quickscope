@@ -1,6 +1,6 @@
 {
   "name": "quickscope",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Decky Loader plugin: launch Moonlight and other streaming clients outside Gamescope",
   "type": "module",
   "scripts": {
