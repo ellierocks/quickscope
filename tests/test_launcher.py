@@ -5,6 +5,7 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -163,7 +164,7 @@ class Brightness(LauncherTestCase):
 
     def test_match_gaming_mode_locks_current_level_and_restores(self):
         pending = {"lock_brightness": True, "match_gaming_brightness": True}
-        self.l.lock_brightness(pending)
+        self.l.choose_brightness(pending)
         self.assertEqual(pending["brightness_raw"], 17011)
         self.set_raw(40000)  # KDE changed it during the session
         self.l.restore(reload=False)
@@ -171,15 +172,64 @@ class Brightness(LauncherTestCase):
 
     def test_custom_level(self):
         pending = {"lock_brightness": True, "match_gaming_brightness": False, "brightness_pct": 100}
-        self.l.lock_brightness(pending)
+        self.l.choose_brightness(pending)
         self.assertEqual(pending["brightness_raw"], 65535)
 
     def test_no_backlight_is_harmless(self):
         self.l.BACKLIGHT_ROOT = os.path.join(self.home, "nothing")
         pending = {"lock_brightness": True}
-        self.l.lock_brightness(pending)
+        self.l.choose_brightness(pending)
         self.assertNotIn("brightness_raw", pending)
         self.assertFalse(self.l.write_backlight(100))
+
+    def test_raw_to_pct_inverts_the_curve(self):
+        for pct in (5, 48, 50, 100):
+            self.assertEqual(self.l.brightness_raw_to_pct(self.l.brightness_pct_to_raw(pct, 65535), 65535), pct)
+
+    def test_steps_snap_to_grid_and_clamp(self):
+        step = self.l.step_brightness_pct
+        self.assertEqual(step(48, 1), 50)
+        self.assertEqual(step(48, -1), 45)
+        self.assertEqual(step(50, 1), 55)
+        self.assertEqual(step(50, -1), 45)
+        self.assertEqual(step(100, 1), 100)
+        self.assertEqual(step(5, -1), 5)
+
+    def test_unlocked_hold_releases(self):
+        keeper = self.l.SessionKeeper(False, 17011, hold_brightness_for=0)
+        self.l.KEEPER_INTERVAL = 0.01
+        keeper.start()
+        time.sleep(0.1)
+        keeper.stop()
+        self.assertIsNone(keeper.brightness_raw)
+
+    def test_combo_step_moves_lock_target(self):
+        keeper = self.l.SessionKeeper(False, 17011)
+        combo = self.l.BrightnessCombo(None, keeper)
+        combo.step(1)
+        self.assertEqual(self.raw(), self.l.brightness_pct_to_raw(50, 65535))
+        self.assertEqual(keeper.brightness_raw, self.raw())
+
+
+class Combo(LauncherTestCase):
+    def report(self, steam, y):
+        r = bytearray(64)
+        r[0:3] = b"\x01\x00\x09"
+        if steam:
+            r[9] |= 0x20
+        r[50:52] = y.to_bytes(2, "little", signed=True)
+        return bytes(r)
+
+    def test_direction(self):
+        d = self.l.combo_direction
+        self.assertEqual(d(self.report(True, 32767)), 1)
+        self.assertEqual(d(self.report(True, -32767)), -1)
+        self.assertEqual(d(self.report(True, 5000)), 0)
+        self.assertEqual(d(self.report(False, 32767)), 0)
+
+    def test_state_report(self):
+        self.assertTrue(self.l.is_deck_state_report(self.report(False, 0)))
+        self.assertFalse(self.l.is_deck_state_report(b"\x01\x00\x09"))
 
 
 class Volume(LauncherTestCase):
@@ -191,7 +241,7 @@ class Volume(LauncherTestCase):
 
     def test_osd_qml_is_filled_in(self):
         qml = self.l.OSD_QML % {"title": '"t"', "state_url": '"file:///x"'}
-        self.assertIn('osd.volume + "%"', qml)
+        self.assertIn("text: osd.valueText", qml)
         self.assertNotIn("%(", qml)
 
 

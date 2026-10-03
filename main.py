@@ -24,6 +24,8 @@ SETTINGS_DEFAULTS = {
     "brightness_pct": 50,
     # Our own volume indicator when the minimal desktop skips Plasma's.
     "volume_osd": True,
+    # Steam + left stick up/down changes the brightness in the session.
+    "brightness_combo": True,
     "favorites": [],
     # Per-shortcut overrides, {"<appid>": "direct"}. Shortcuts default to
     # "hybrid" (launched directly, desktop Steam started alongside for its
@@ -310,6 +312,7 @@ class Plugin:
                 "match_gaming_brightness": s["match_gaming_brightness"],
                 "brightness_pct": s["brightness_pct"],
                 "volume_osd": s["volume_osd"],
+                "brightness_combo": s["brightness_combo"],
             }
 
             path = _paths()["pending"]

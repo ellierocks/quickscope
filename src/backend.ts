@@ -11,6 +11,7 @@ export interface Settings {
   match_gaming_brightness: boolean;
   brightness_pct: number;
   volume_osd: boolean;
+  brightness_combo: boolean;
   favorites: number[];
   launch_modes: Record<string, ShortcutMode>;
 }

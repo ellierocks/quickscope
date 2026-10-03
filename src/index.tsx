@@ -240,33 +240,23 @@ function Content() {
       <PanelSection title="Display & audio">
         <PanelSectionRow>
           <ToggleField
-            label="Lock brightness"
-            description="Hold the screen at one brightness while the app runs; there's no Quick Access menu to change it."
-            checked={settings.lock_brightness}
-            onChange={(v) => update("lock_brightness", v)}
+            label="Match Gaming Mode brightness"
+            description="Start the app at the brightness you had when launching."
+            checked={settings.match_gaming_brightness}
+            onChange={async (v) => {
+              // Start the slider at the current brightness.
+              if (!v) {
+                const current = await getSteamBrightness();
+                if (current !== null) await update("brightness_pct", Math.max(5, current));
+              }
+              update("match_gaming_brightness", v);
+            }}
           />
         </PanelSectionRow>
-        {settings.lock_brightness && (
-          <PanelSectionRow>
-            <ToggleField
-              label="Match Gaming Mode"
-              description="Use the brightness you had when launching."
-              checked={settings.match_gaming_brightness}
-              onChange={async (v) => {
-                // Start the slider at the current brightness.
-                if (!v) {
-                  const current = await getSteamBrightness();
-                  if (current !== null) await update("brightness_pct", Math.max(5, current));
-                }
-                update("match_gaming_brightness", v);
-              }}
-            />
-          </PanelSectionRow>
-        )}
-        {settings.lock_brightness && !settings.match_gaming_brightness && (
+        {!settings.match_gaming_brightness && (
           <PanelSectionRow>
             <SliderField
-              label="Brightness"
+              label="Starting brightness"
               value={settings.brightness_pct}
               min={5}
               max={100}
@@ -276,6 +266,22 @@ function Content() {
             />
           </PanelSectionRow>
         )}
+        <PanelSectionRow>
+          <ToggleField
+            label="Brightness shortcut"
+            description="Hold Steam and push the left stick up or down to change the brightness while the app runs."
+            checked={settings.brightness_combo}
+            onChange={(v) => update("brightness_combo", v)}
+          />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <ToggleField
+            label="Lock brightness"
+            description="Stop the desktop's power management from dimming or changing the screen. The shortcut still works."
+            checked={settings.lock_brightness}
+            onChange={(v) => update("lock_brightness", v)}
+          />
+        </PanelSectionRow>
         <PanelSectionRow>
           <ToggleField
             label="Volume indicator"

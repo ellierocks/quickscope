@@ -75,7 +75,9 @@ Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quicksc
 | Skip splash screen | On |
 | Minimal desktop (no Plasma panel) | On |
 | Performance mode (GPU/CPU at full speed; uses more battery) | On |
-| Lock brightness (there's no Quick Access menu outside Gaming Mode) | On, matching Gaming Mode's level; or a fixed level |
+| Starting brightness | Matches Gaming Mode; or a fixed level |
+| Brightness shortcut (hold Steam + push the left stick up or down; there's no Quick Access menu outside Gaming Mode) | On |
+| Lock brightness (stops KDE's power management changing it; the shortcut still works) | On |
 | Volume indicator (replaces the one the minimal desktop skips) | On |
 
 ## Troubleshooting
@@ -101,7 +103,8 @@ Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quicksc
 | KDE helpers skipped (Baloo, Discover notifier, KDE Connect, print applet) | `Hidden=true` overrides, `systemctl --user mask --runtime kde-baloo.service` |
 | No splash screen | `Engine=none` in `~/.config/ksplashrc` (KDE's own switch), restored afterwards |
 | No Plasma panel | `systemctl --user mask --runtime plasma-plasmashell.service` |
-| Brightness lock *(setting)* | Writes the backlight (`/sys/class/backlight/*/brightness`) and re-applies it if KDE changes it; the original level is restored afterwards |
+| Brightness | Writes the backlight (`/sys/class/backlight/*/brightness`) and re-applies it if KDE changes it (for the whole session with the lock, otherwise while the desktop starts); the original level is restored afterwards |
+| Brightness shortcut *(setting)* | Reads the built-in controller's hidraw reports without grabbing them, so Steam and the app still get every input |
 | Performance mode *(setting)* | `steamosctl set-gpu-performance-level high` (re-applied while running) and `set-cpu-scaling-governor performance` |
 
 Everything lives in `~/.config` or `/run`, never in files a SteamOS update replaces. If Quickscope had to create `ksplashrc`, it deletes it again afterwards.

@@ -20,6 +20,7 @@ import glob
 import json
 import os
 import re
+import select
 import shlex
 import shutil
 import subprocess
@@ -57,6 +58,19 @@ KEEPER_INTERVAL = 2
 # Steam's brightness slider drives the backlight through roughly this curve
 # (measured on a Deck LCD: 48% -> 26% of the backlight's range, 100% -> max).
 BRIGHTNESS_EXPONENT = 1.84
+BRIGHTNESS_STEP = 5
+BRIGHTNESS_MIN_PCT = 5
+# With the lock off, the starting brightness is still held this long so KDE's
+# power management can't override it as the desktop starts.
+BRIGHTNESS_SETTLE_TIME = 15
+
+# Brightness shortcut: Steam + left stick up/down, read from the built-in
+# controller's hidraw state reports (Steam button = byte 9 bit 5, left stick
+# Y = bytes 50-51 as little-endian int16, up positive).
+DECK_HID_ID = "000028DE:00001205"
+COMBO_STICK_THRESHOLD = 20000
+COMBO_REPEAT_DELAY = 0.35
+COMBO_REPEAT_INTERVAL = 0.12
 
 # Quiet session: KDE's own background helpers are skipped for the launch
 # session. The user's own autostart apps and services (sync clients keeping
@@ -177,9 +191,10 @@ Window {
 }
 """
 OSD_TITLE = "Quickscope OSD"
-# Volume indicator. Drawn as a layer-shell overlay (QT_WAYLAND_SHELL_INTEGRATION
-# =layer-shell) so it shows above fullscreen apps without taking focus; the
-# launcher writes the volume to a small JSON file that this polls.
+# On-screen indicator for volume and brightness. Drawn as a layer-shell overlay
+# (QT_WAYLAND_SHELL_INTEGRATION=layer-shell) so it shows above fullscreen apps
+# without taking focus; the launcher writes what to show to a small JSON file
+# that this polls.
 OSD_QML = """\
 import QtQuick
 import org.kde.layershell 1.0 as LayerShell
@@ -187,7 +202,7 @@ import org.kde.layershell 1.0 as LayerShell
 Window {
     id: osd
     title: %(title)s
-    width: 360
+    width: 420
     height: 120
     visible: false
     color: "transparent"
@@ -198,8 +213,9 @@ Window {
     LayerShell.Window.scope: "quickscope-osd"
 
     property int seq: 0
-    property int volume: 0
-    property bool muted: false
+    property string label: ""
+    property real level: 0
+    property string valueText: ""
 
     Rectangle {
         anchors.horizontalCenter: parent.horizontalCenter
@@ -214,7 +230,8 @@ Window {
             anchors.centerIn: parent
             spacing: 16
             Text {
-                text: "Volume"
+                text: osd.label
+                width: 104
                 color: "#dcdedf"
                 font.pixelSize: 20
                 anchors.verticalCenter: parent.verticalCenter
@@ -226,14 +243,14 @@ Window {
                 color: "#3d4450"
                 anchors.verticalCenter: parent.verticalCenter
                 Rectangle {
-                    width: osd.muted ? 0 : parent.width * Math.min(osd.volume, 100) / 100
+                    width: parent.width * Math.max(0, Math.min(osd.level, 1))
                     height: parent.height
                     radius: 4
                     color: "#1a9fff"
                 }
             }
             Text {
-                text: osd.muted ? "Muted" : osd.volume + "%%"
+                text: osd.valueText
                 color: "#ffffff"
                 font.pixelSize: 20
                 width: 64
@@ -255,8 +272,9 @@ Window {
                 var s = JSON.parse(xhr.responseText);
                 if (s.seq === osd.seq) return;
                 osd.seq = s.seq;
-                osd.volume = s.volume;
-                osd.muted = s.muted;
+                osd.label = s.label;
+                osd.level = s.level;
+                osd.valueText = s.text;
                 osd.visible = true;
                 hide.restart();
             } catch (e) {}
@@ -356,14 +374,18 @@ class SessionKeeper(threading.Thread):
     runs: desktop Steam puts the GPU performance level back to auto when it
     starts, and KDE's power management changes the brightness."""
 
-    def __init__(self, pin_gpu, brightness_raw):
+    def __init__(self, pin_gpu, brightness_raw, hold_brightness_for=None):
         super().__init__(daemon=True)
         self.pin_gpu = pin_gpu
         self.brightness_raw = brightness_raw
+        # Without the lock, only hold brightness while KDE starts up.
+        self.release_at = None if hold_brightness_for is None else time.monotonic() + hold_brightness_for
         self.stopped = threading.Event()
 
     def run(self):
         while not self.stopped.wait(KEEPER_INTERVAL):
+            if self.release_at is not None and time.monotonic() >= self.release_at:
+                self.brightness_raw = self.release_at = None
             if self.pin_gpu:
                 level = run(["steamosctl", "get-gpu-performance-level"])
                 if succeeded(level) and level.stdout.rsplit(":", 1)[-1].strip() != "high":
@@ -432,43 +454,82 @@ def read_volume():
     return parse_volume(vol.stdout, mute.stdout)
 
 
-class VolumeOsd:
-    """Shows a volume indicator when the volume changes. Without plasmashell
-    nothing else draws one."""
+def brightness_raw_to_pct(raw, max_raw):
+    """Inverse of brightness_pct_to_raw, rounded to a whole percent."""
+    if max_raw <= 0:
+        return 0
+    return round(100 * (max(0, raw) / max_raw) ** (1 / BRIGHTNESS_EXPONENT))
+
+
+def step_brightness_pct(pct, direction):
+    """Next brightness on the BRIGHTNESS_STEP grid, clamped like the Steam slider."""
+    if direction > 0:
+        pct = (pct // BRIGHTNESS_STEP + 1) * BRIGHTNESS_STEP
+    else:
+        pct = (-(-pct // BRIGHTNESS_STEP) - 1) * BRIGHTNESS_STEP
+    return max(BRIGHTNESS_MIN_PCT, min(100, pct))
+
+
+class Osd:
+    """The on-screen indicator overlay. Without plasmashell nothing else draws
+    volume or brightness changes."""
 
     def __init__(self):
-        self.osd = None
-        self.watch = None
+        self.proc = None
         self.seq = 0
-        self.last = None
+        self.lock = threading.Lock()
 
     def start(self):
         qml = shutil.which("qml6") or shutil.which("qml")
-        if not (qml and shutil.which("pactl")):
-            log("no qml runtime or pactl, skipping the volume indicator")
+        if not qml:
+            log("no qml runtime, skipping the on-screen indicator")
             return False
         write_file(OSD_SCREEN, OSD_QML % {
             "title": json.dumps(OSD_TITLE),
             "state_url": json.dumps("file://" + OSD_STATE),
         })
-        self.last = read_volume()
-        self._write()
+        write_json(OSD_STATE, {"seq": 0, "label": "", "level": 0, "text": ""})
         env = dict(os.environ, QT_WAYLAND_SHELL_INTEGRATION="layer-shell", QML_XHR_ALLOW_FILE_READ="1")
         try:
-            self.osd = subprocess.Popen([qml, OSD_SCREEN], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.proc = subprocess.Popen([qml, OSD_SCREEN], env=env, stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL)
+        except OSError as e:
+            log(f"on-screen indicator failed to start: {e}")
+            return False
+        return True
+
+    def show(self, label, level, text):
+        with self.lock:
+            self.seq += 1
+            write_json(OSD_STATE, {"seq": self.seq, "label": label, "level": level, "text": text})
+
+    def stop(self):
+        if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
+
+
+class VolumeWatcher:
+    """Shows the volume on the OSD whenever it changes."""
+
+    def __init__(self, osd):
+        self.osd = osd
+        self.watch = None
+        self.last = None
+
+    def start(self):
+        if not shutil.which("pactl"):
+            log("no pactl, skipping the volume indicator")
+            return False
+        self.last = read_volume()
+        try:
             self.watch = subprocess.Popen(["pactl", "subscribe"], stdout=subprocess.PIPE,
                                           stderr=subprocess.DEVNULL, text=True)
         except OSError as e:
             log(f"volume indicator failed to start: {e}")
-            self.stop()
             return False
         threading.Thread(target=self._follow, daemon=True).start()
         log("volume indicator running")
         return True
-
-    def _write(self):
-        volume, muted = self.last or (0, False)
-        write_json(OSD_STATE, {"seq": self.seq, "volume": volume, "muted": muted})
 
     def _follow(self):
         for line in self.watch.stdout:
@@ -478,13 +539,127 @@ class VolumeOsd:
             current = read_volume()
             if current and current != self.last:
                 self.last = current
-                self.seq += 1
-                self._write()
+                volume, muted = current
+                self.osd.show("Volume", 0 if muted else min(volume, 100) / 100,
+                              "Muted" if muted else f"{volume}%")
 
     def stop(self):
-        for proc in (self.watch, self.osd):
-            if proc and proc.poll() is None:
-                proc.terminate()
+        if self.watch and self.watch.poll() is None:
+            self.watch.terminate()
+
+
+def deck_controller_node():
+    """The hidraw node that streams the built-in controller's state reports."""
+    for sysdir in sorted(glob.glob("/sys/class/hidraw/hidraw*")):
+        try:
+            with open(os.path.join(sysdir, "device", "uevent")) as f:
+                if DECK_HID_ID not in f.read():
+                    continue
+        except OSError:
+            continue
+        path = "/dev/" + os.path.basename(sysdir)
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except OSError:
+            continue
+        try:
+            end = time.monotonic() + 0.3
+            while time.monotonic() < end:
+                if not select.select([fd], [], [], 0.1)[0]:
+                    continue
+                try:
+                    report = os.read(fd, 128)
+                except BlockingIOError:
+                    continue
+                if is_deck_state_report(report):
+                    return path
+        finally:
+            os.close(fd)
+    return None
+
+
+def is_deck_state_report(report):
+    return len(report) == 64 and report[0] == 1 and report[1] == 0 and report[2] == 9
+
+
+def combo_direction(report):
+    """+1/-1 while Steam is held with the left stick pushed up/down, else 0."""
+    if not report[9] & 0x20:
+        return 0
+    y = int.from_bytes(report[50:52], "little", signed=True)
+    if y >= COMBO_STICK_THRESHOLD:
+        return 1
+    if y <= -COMBO_STICK_THRESHOLD:
+        return -1
+    return 0
+
+
+class BrightnessCombo(threading.Thread):
+    """Steam + left stick up/down changes the brightness, like hardware keys.
+    Reads the controller passively, so Steam and the app still see everything."""
+
+    def __init__(self, osd, keeper):
+        super().__init__(daemon=True)
+        self.osd = osd
+        self.keeper = keeper
+        self.stopped = threading.Event()
+
+    def run(self):
+        node = deck_controller_node()
+        if not node:
+            log("no Deck controller found, brightness shortcut off")
+            return
+        try:
+            fd = os.open(node, os.O_RDONLY | os.O_NONBLOCK)
+        except OSError as e:
+            log(f"brightness shortcut can't read {node}: {e}")
+            return
+        log(f"brightness shortcut reading {node}")
+        held, next_step = 0, 0.0
+        try:
+            while not self.stopped.is_set():
+                if not select.select([fd], [], [], 0.2)[0]:
+                    continue
+                try:
+                    report = os.read(fd, 128)
+                except BlockingIOError:
+                    continue
+                except OSError as e:
+                    log(f"brightness shortcut stopped: {e}")
+                    return
+                if not is_deck_state_report(report):
+                    continue
+                direction = combo_direction(report)
+                now = time.monotonic()
+                if direction != held:
+                    held = direction
+                    if direction:
+                        self.step(direction)
+                        next_step = now + COMBO_REPEAT_DELAY
+                elif direction and now >= next_step:
+                    self.step(direction)
+                    next_step = now + COMBO_REPEAT_INTERVAL
+        finally:
+            os.close(fd)
+
+    def step(self, direction):
+        current = read_backlight()
+        if not current:
+            return
+        raw, max_raw = current
+        pct = step_brightness_pct(brightness_raw_to_pct(raw, max_raw), direction)
+        target = brightness_pct_to_raw(pct, max_raw)
+        if self.keeper and self.keeper.brightness_raw is not None:
+            # Set first, so the keeper doesn't put the old value back.
+            self.keeper.brightness_raw = target
+        write_backlight(target)
+        if self.osd:
+            self.osd.show("Brightness", pct / 100, f"{pct}%")
+
+    def stop(self):
+        # Wait so a step in flight can't land after restore().
+        self.stopped.set()
+        self.join(timeout=1)
 
 
 def boost_performance():
@@ -656,12 +831,12 @@ def restore_splash(undo):
     log(f"restored splash Engine {original!r}")
 
 
-def lock_brightness(pending):
-    """Decide the session's brightness while still in Gaming Mode, where the
-    backlight is at the level the user chose there."""
+def choose_brightness(pending):
+    """Decide the session's starting brightness while still in Gaming Mode,
+    where the backlight is at the level the user chose there."""
     current = read_backlight()
     if not current:
-        log("no backlight found, not locking brightness")
+        log("no backlight found, leaving brightness alone")
         return
     raw, max_raw = current
     if pending.get("match_gaming_brightness", True):
@@ -671,7 +846,7 @@ def lock_brightness(pending):
     pending["brightness_raw"] = target
     write_json(PENDING, pending)
     record_undo("brightness", {"raw": raw})
-    log(f"brightness locked at {target} (Gaming Mode had {raw} of {max_raw})")
+    log(f"session brightness {target} (Gaming Mode had {raw} of {max_raw})")
 
 
 def prepare():
@@ -699,8 +874,7 @@ def prepare():
     if pending.get("skip_splash") or pending.get("minimal_desktop"):
         disable_splash()
 
-    if pending.get("lock_brightness"):
-        lock_brightness(pending)
+    choose_brightness(pending)
 
     to_mask = []
     if pending.get("minimal_desktop"):
@@ -981,12 +1155,22 @@ def launch():
     pin_gpu = boost_performance() if pending.get("performance", True) else False
     keeper = None
     if pin_gpu or brightness_raw is not None:
-        keeper = SessionKeeper(pin_gpu, brightness_raw)
+        hold_for = None if pending.get("lock_brightness") else BRIGHTNESS_SETTLE_TIME
+        keeper = SessionKeeper(pin_gpu, brightness_raw, hold_for)
         keeper.start()
     # Plasma's panel normally draws the volume indicator.
-    osd = VolumeOsd() if pending.get("volume_osd", True) and pending.get("minimal_desktop") else None
+    want_volume = pending.get("volume_osd", True) and pending.get("minimal_desktop")
+    want_combo = pending.get("brightness_combo", True)
+    osd = Osd() if want_volume or want_combo else None
     if osd and not osd.start():
         osd = None
+    volume = VolumeWatcher(osd) if osd and want_volume else None
+    if volume and not volume.start():
+        volume = None
+    combo = None
+    if want_combo:
+        combo = BrightnessCombo(osd, keeper)
+        combo.start()
     returning = pending.get("return_to_gaming")
     try:
         log(f"launching {time.monotonic() - started:.1f}s after start")
@@ -1004,6 +1188,10 @@ def launch():
             # Covers the clean-up and logout; the logout closes it.
             show_loading_screen("Returning to Gaming Mode…")
         steam_shutdown = request_steam_shutdown() if returning else None
+        if combo:
+            combo.stop()
+        if volume:
+            volume.stop()
         if osd:
             osd.stop()
         if keeper:
