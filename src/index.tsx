@@ -21,6 +21,7 @@ import {
   setSetting,
 } from "./backend";
 import { patchGamePage } from "./gamepage";
+import { addLaunchingRoute } from "./launching";
 import { MODE_NAMES, effectiveMode, launch, toast } from "./launch";
 import { LibraryApp, getLibraryApps, getSteamBrightness } from "./library";
 
@@ -290,11 +291,15 @@ function Content() {
 
 export default definePlugin(() => {
   const unpatchGamePage = patchGamePage();
+  const removeLaunchingRoute = addLaunchingRoute();
   return {
     name: "Quickscope",
     titleView: <div className={staticClasses.Title}>Quickscope</div>,
     content: <Content />,
     icon: <FaCrosshairs />,
-    onDismount: unpatchGamePage,
+    onDismount() {
+      unpatchGamePage();
+      removeLaunchingRoute();
+    },
   };
 });

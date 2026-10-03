@@ -10,6 +10,7 @@ import {
   prepareLaunch,
   switchSession,
 } from "./backend";
+import { hideLaunchingPage, showLaunchingPage } from "./launching";
 import { LibraryApp, getShortcutDetails, steamSwitchToDesktop } from "./library";
 
 export const DEFAULT_SHORTCUT_MODE: ShortcutMode = "hybrid";
@@ -70,12 +71,11 @@ export async function launch(app: LibraryApp) {
     toast(`Couldn't stage launch: ${staged.error}`);
     return;
   }
-  const via =
-    app.kind === "shortcut" && staged.mode === "steam"
-      ? " (through Steam: couldn't read the shortcut)"
-      : staged.mode ? ` (${MODE_NAMES[staged.mode]})` : "";
-  toast(`Leaving Gamescope for ${app.name}${via}…`);
+  if (app.kind === "shortcut" && staged.mode === "steam") {
+    toast(`${app.name}: launching through Steam, couldn't read the shortcut`);
+  }
 
+  await showLaunchingPage(app.name);
   const switched = await switchSession();
   if (!switched.ok) {
     // Steam's own Switch to Desktop as a last resort; it picks its own session.
@@ -84,6 +84,7 @@ export async function launch(app: LibraryApp) {
     } catch (e) {
       console.error("Quickscope: SwitchToDesktop failed", e);
     }
+    hideLaunchingPage();
     await cancelPending();
     toast(`Couldn't switch to desktop: ${switched.error}`);
   }

@@ -81,6 +81,7 @@ Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quicksc
 ## Troubleshooting
 
 - **Stuck on the desktop?** Use *Return to Gaming Mode*, or run `steamos-session-select gamescope`.
+- **Decky disappeared after several very short sessions in a row?** Decky's crash protection disables it when Steam's UI goes away three times within about a minute, and each Quickscope round trip closes Steam's UI twice. Restart the Deck (or `sudo systemctl start plugin_loader`) to bring it back. Normal sessions longer than a minute don't trigger it.
 - **Logs:** `~/.local/state/quickscope/launcher.log` (launch timings and every change made or undone), and Decky's log in `~/homebrew/logs/Quickscope/`.
 - **Undo everything by hand:** `python3 ~/.local/state/quickscope/quickscope_launcher.py --restore`
 

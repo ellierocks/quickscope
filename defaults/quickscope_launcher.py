@@ -50,6 +50,8 @@ KWIN_SCRIPT_NAME = "quickscope-session"
 STEAM_FAST_START_ARGS = ["-silent", "-noverifyfiles", "-skipinitialbootstrap", "-norepairfiles"]
 STEAMOS_CLIENT = "/usr/lib/steam/steam"
 HYBRID_STEAM_DELAY = 1
+# How long to wait for desktop Steam to exit cleanly before returning anyway.
+STEAM_SHUTDOWN_TIMEOUT = 8
 KEEPER_INTERVAL = 2
 
 # Steam's brightness slider drives the backlight through roughly this curve
@@ -782,16 +784,15 @@ def load_session_script(force_fullscreen, loading):
     return False
 
 
-def show_loading_screen(name):
-    """Cover the black screen until the app's window appears. Returns the
-    process or None."""
+def show_loading_screen(message):
+    """A full-screen loading screen with `message`. Returns the process or None."""
     qml = shutil.which("qml6") or shutil.which("qml")
     if not qml:
         log("no qml runtime, skipping loading screen")
         return None
     write_file(LOADING_SCREEN, LOADING_QML % {
         "title": json.dumps(LOADING_TITLE),
-        "message": json.dumps(f"Starting {name}…"),
+        "message": json.dumps(message),
     })
     try:
         return subprocess.Popen([qml, LOADING_SCREEN], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -899,6 +900,38 @@ def run_via_steam(pending, loading=None):
     log(f"AppId={appid} exited")
 
 
+def steam_running():
+    return succeeded(run(["pgrep", "-x", "steam"]))
+
+
+def request_steam_shutdown():
+    """Ask desktop Steam to exit cleanly. Killed at logout, it would leave its
+    crash marker behind and Gaming Mode's Steam would re-verify its install and
+    run an update check. Returns when the request was sent, or None."""
+    if not steam_running():
+        return None
+    client = STEAMOS_CLIENT if os.path.exists(STEAMOS_CLIENT) else shutil.which("steam")
+    if not client:
+        return None
+    try:
+        subprocess.Popen([client, "-shutdown"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except OSError as e:
+        log(f"could not ask Steam to shut down: {e}")
+        return None
+    log("asked desktop Steam to shut down")
+    return time.monotonic()
+
+
+def wait_for_steam_exit(requested):
+    while time.monotonic() - requested < STEAM_SHUTDOWN_TIMEOUT:
+        if not steam_running():
+            log(f"desktop Steam exited cleanly after {time.monotonic() - requested:.1f}s")
+            return
+        time.sleep(0.2)
+    log("desktop Steam still running, returning anyway")
+
+
 def return_to_gaming():
     exe = shutil.which("steamos-session-select")
     if exe:
@@ -923,13 +956,19 @@ def launch():
     if brightness_raw is not None:
         write_backlight(brightness_raw)
 
+    # Loading screen right away: KWin's Wayland socket exists as soon as its
+    # service has started, before KWin answers on D-Bus.
+    use_loading = pending.get("loading_screen", True)
+    starting = f"Starting {pending.get('name') or 'game'}…"
+    loading = show_loading_screen(starting) if use_loading else None
+
     if wait_for_kwin():
         log(f"KWin ready after {time.monotonic() - started:.1f}s")
     else:
         log("KWin never appeared on D-Bus, launching anyway")
-
-    # Loading screen first, so there's never a black screen.
-    loading = show_loading_screen(pending.get("name") or "game") if pending.get("loading_screen", True) else None
+    if loading and loading.poll() is not None:
+        log("loading screen exited early, starting it again")
+        loading = show_loading_screen(starting)
 
     script = bool((pending.get("force_fullscreen") or loading)
                   and load_session_script(pending.get("force_fullscreen"), loading))
@@ -961,6 +1000,10 @@ def launch():
         log(f"launch failed: {e!r}")
     finally:
         close_loading_screen(loading)
+        if returning and use_loading:
+            # Covers the clean-up and logout; the logout closes it.
+            show_loading_screen("Returning to Gaming Mode…")
+        steam_shutdown = request_steam_shutdown() if returning else None
         if osd:
             osd.stop()
         if keeper:
@@ -969,6 +1012,8 @@ def launch():
             unload_session_script()
         # Undo before returning: the logout ends this process.
         restore(restart_shell=not returning)
+        if steam_shutdown:
+            wait_for_steam_exit(steam_shutdown)
 
     if returning:
         return_to_gaming()
