@@ -273,6 +273,110 @@ class Power(LauncherTestCase):
         self.assertEqual(self.state["boost"], "disabled")
 
 
+# Trimmed `modetest -c` / `-p` output from a docked Deck LCD on a 4K TV.
+MODETEST_CONNECTORS = """\
+Connectors:
+id\tencoder\tstatus\t\tname\t\tsize (mm)\tmodes\tencoders
+135\t0\tconnected\teDP-1          \t100x150\t\t2\t134
+  modes:
+\tindex name refresh (Hz) hdisp hss hse htot vdisp vss vse vtot
+  #0 800x1280 60.00 800 832 852 872 1280 1296 1298 1324 69270 flags: phsync, pvsync; type: preferred, driver
+  #1 256x160 58.79 256 264 288 320 160 163 169 172 3236 flags: nhsync, pvsync; type:
+  props:
+\t1 EDID:
+145\t144\tconnected\tDP-1           \t1020x570\t\t51\t144
+  modes:
+\tindex name refresh (Hz) hdisp hss hse htot vdisp vss vse vtot
+  #0 3840x2160 60.00 3840 3944 3952 3980 2160 2168 2178 2250 537300 flags: phsync, pvsync; type: preferred, driver
+  #1 3840x2160 60.00 3840 4016 4104 4400 2160 2168 2178 2250 594000 flags: phsync, pvsync; type: driver
+  #2 1920x1080 59.94 1920 2008 2052 2200 1080 1084 1089 1125 148352 flags: phsync, pvsync; type: driver
+  props:
+\t1 EDID:
+150\t0\tdisconnected\tHDMI-A-1       \t0x0\t\t0\t149
+"""
+MODETEST_CRTCS = """\
+CRTCs:
+id\tfb\tpos\tsize
+118\t165\t(0,0)\t(3840x2160)
+  #0 3840x2160 60.00 3840 3944 3952 3980 2160 2168 2178 2250 537300 flags: phsync, pvsync; type: preferred, driver
+  props:
+123\t0\t(0,0)\t(0x0)
+  #0  -nan 0 0 0 0 0 0 0 0 0 flags: ; type:
+Planes:
+"""
+
+
+class Display(LauncherTestCase):
+    def test_parse_connectors(self):
+        connectors = self.l.parse_modetest_connectors(MODETEST_CONNECTORS)
+        self.assertEqual(connectors["eDP-1"]["modes"], ["800x1280@60.00"])
+        self.assertEqual(connectors["DP-1"]["modes"], ["3840x2160@60.00", "1920x1080@59.94"])
+        self.assertFalse(connectors["HDMI-A-1"]["connected"])
+
+    def test_active_mode(self):
+        self.assertEqual(self.l.parse_modetest_active_modes(MODETEST_CRTCS), ["3840x2160@60.00"])
+
+    def fake_modetest(self, connectors=MODETEST_CONNECTORS, crtcs=MODETEST_CRTCS):
+        def fake_run(cmd):
+            out = connectors if cmd[-1] == "-c" else crtcs
+            return subprocess.CompletedProcess(cmd, 0, out)
+        self.l.run = fake_run
+        real_which = shutil.which
+        shutil.which = lambda name: "/usr/bin/" + name
+        self.addCleanup(setattr, shutil, "which", real_which)
+
+    def test_docked_matches_gaming_mode(self):
+        self.fake_modetest()
+        info = self.l.display_info()
+        self.assertEqual((info["connector"], info["external"], info["current"]), ("DP-1", True, "3840x2160@60.00"))
+        pending = {}
+        self.l.choose_display(pending)
+        self.assertEqual(pending["display"], {"connector": "DP-1", "mode": "3840x2160@60.00", "disable": ["eDP-1"]})
+
+    def test_forced_mode_and_fallback(self):
+        self.fake_modetest()
+        pending = {"display_mode": "1920x1080@59.94"}
+        self.l.choose_display(pending)
+        self.assertEqual(pending["display"]["mode"], "1920x1080@59.94")
+        pending = {"display_mode": "2560x1440@144.00"}
+        self.l.choose_display(pending)
+        self.assertEqual(pending["display"]["mode"], "3840x2160@60.00")
+
+    def test_handheld_lcd_needs_nothing(self):
+        lcd_only = MODETEST_CONNECTORS.split("145\t144")[0]
+        self.fake_modetest(lcd_only, MODETEST_CRTCS.replace("3840x2160 60.00", "800x1280 60.00"))
+        pending = {}
+        self.l.choose_display(pending)
+        self.assertNotIn("display", pending)
+
+    def test_closest_kscreen_mode(self):
+        ids = {"3840x2160@60.00": "1", "3840x2160@59.94": "2", "1920x1080@60.00": "3"}
+        self.assertEqual(self.l.closest_mode_id(ids, "3840x2160@59.94"), "2")
+        self.assertEqual(self.l.closest_mode_id({"800x1280@60.00": "1"}, "800x1280@59.99"), "1")
+        self.assertIsNone(self.l.closest_mode_id(ids, "2560x1440@60.00"))
+
+    def test_only_differences_are_applied(self):
+        outputs = {
+            "eDP-1": {"enabled": False, "mode": "1", "modes": {"800x1280@60.00": "1"}},
+            "DP-1": {"enabled": True, "mode": "9", "modes": {"3840x2160@60.00": "9", "1920x1080@60.00": "18"}},
+        }
+        display = {"connector": "DP-1", "mode": "3840x2160@60.00", "disable": ["eDP-1"]}
+        self.assertEqual(self.l.display_changes(outputs, display), [])
+        display["mode"] = "1920x1080@60.00"
+        self.assertEqual(self.l.display_changes(outputs, display), ["output.DP-1.mode.18"])
+        outputs["eDP-1"]["enabled"] = True
+        self.assertEqual(self.l.display_changes(outputs, display),
+                         ["output.eDP-1.disable", "output.DP-1.mode.18"])
+
+    def test_output_config_restored(self):
+        self.l.write_file(self.l.KWIN_OUTPUT_CONFIG, "original")
+        self.l.backup_output_config()
+        self.l.write_file(self.l.KWIN_OUTPUT_CONFIG, "changed by the session")
+        self.l.restore(reload=False)
+        with open(self.l.KWIN_OUTPUT_CONFIG) as f:
+            self.assertEqual(f.read(), "original")
+
+
 class Combo(LauncherTestCase):
     def report(self, steam, y):
         r = bytearray(64)

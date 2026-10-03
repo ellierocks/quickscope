@@ -9,6 +9,7 @@ returns to Gaming Mode when the app exits.
   --prepare    install the unit and apply one-shot session tweaks for the
                staged launch (run by the Decky backend just before switching)
   --restore    undo any one-shot tweaks
+  --displays   print the display an app would use and its modes, as JSON
   --uninstall  undo tweaks and remove the systemd unit
 
 Every tweak lives in ~/.config or /run and is recorded in undo.json, so
@@ -42,6 +43,7 @@ SELF = os.path.abspath(__file__)
 
 AUTOSTART_DIR = os.path.join(HOME, ".config", "autostart")
 KSPLASHRC = os.path.join(HOME, ".config", "ksplashrc")
+KWIN_OUTPUT_CONFIG = os.path.join(HOME, ".config", "kwinoutputconfig.json")
 ONESHOT_AUTOSTART = os.path.join(AUTOSTART_DIR, "quickscope-oneshot.desktop")
 UNIT_DIR = os.path.join(HOME, ".config", "systemd", "user")
 UNIT_NAME = "quickscope-launch.service"
@@ -96,7 +98,9 @@ QUIET_AUTOSTART = {
     "baloo_file.desktop", "org.kde.discover.notifier.desktop", "org.kde.kdeconnect.daemon.desktop",
     "print-applet.desktop", "orca-autostart.desktop",
 }
-QUIET_MASKED_UNITS = ["kde-baloo.service"]
+# The KScreen OSD asks how to use a newly seen display, over the app;
+# Quickscope sets the layout itself.
+QUIET_MASKED_UNITS = ["kde-baloo.service", "plasma-kscreen-osd.service"]
 
 PENDING_MAX_AGE = 300
 KWIN_TIMEOUT = 20
@@ -709,6 +713,202 @@ def set_power_setting(key, value):
     return succeeded(run(["steamosctl", POWER_SETTINGS[key][1], value]))
 
 
+# --- display mode ----------------------------------------------------------
+
+MODETEST_MODE = re.compile(r"^\s+#\d+\s+(\d+)x(\d+)\S*\s+([\d.]+)\s")
+MODETEST_CONNECTOR = re.compile(r"^\d+\s+\d+\s+(connected|disconnected|unknown)\s+(\S+)")
+MODETEST_CRTC = re.compile(r"^\d+\s+(\d+)\s+\(")
+
+
+def mode_name(width, height, refresh):
+    return f"{width}x{height}@{float(refresh):.2f}"
+
+
+def parse_mode_name(name):
+    m = re.fullmatch(r"(\d+)x(\d+)@([\d.]+)", name or "")
+    return (int(m.group(1)), int(m.group(2)), float(m.group(3))) if m else None
+
+
+def parse_modetest_connectors(text):
+    """{connector: {"connected": bool, "modes": [mode name, ...]}} from `modetest -c`."""
+    connectors, current = {}, None
+    for line in text.splitlines():
+        m = MODETEST_CONNECTOR.match(line)
+        if m:
+            current = {"connected": m.group(1) == "connected", "modes": []}
+            connectors[m.group(2)] = current
+            continue
+        if line.strip().startswith("props:"):
+            current = None
+        m = MODETEST_MODE.match(line)
+        if current is not None and m:
+            width, height, refresh = int(m.group(1)), int(m.group(2)), m.group(3)
+            # Skip tiny fallback modes such as the LCD's 256x160.
+            name = mode_name(width, height, refresh)
+            if width >= 640 and height >= 480 and name not in current["modes"]:
+                current["modes"].append(name)
+    return connectors
+
+
+def parse_modetest_active_modes(text):
+    """Mode names of the CRTCs that are scanning out, from `modetest -p`."""
+    active, lit = [], False
+    for line in text.splitlines():
+        if line.startswith("Planes"):
+            break
+        m = MODETEST_CRTC.match(line)
+        if m:
+            lit = m.group(1) != "0"
+            continue
+        m = MODETEST_MODE.match(line)
+        if lit and m:
+            active.append(mode_name(int(m.group(1)), int(m.group(2)), m.group(3)))
+            lit = False
+    return active
+
+
+def is_internal_connector(name):
+    return name.startswith(("eDP", "LVDS", "DSI"))
+
+
+def display_info():
+    """The display an app will use and its modes, read while Gaming Mode runs.
+
+    External displays win, as in Gaming Mode. "current" is Gamescope's mode
+    when it's one of the display's own."""
+    if not shutil.which("modetest"):
+        return None
+    conns = run(["modetest", "-M", "amdgpu", "-c"])
+    crtcs = run(["modetest", "-M", "amdgpu", "-p"])
+    if not succeeded(conns):
+        return None
+    connectors = {name: c for name, c in parse_modetest_connectors(conns.stdout).items()
+                  if c["connected"] and c["modes"] and not name.startswith("Writeback")}
+    if not connectors:
+        return None
+    external = [n for n in connectors if not is_internal_connector(n)]
+    target = external[0] if external else next(iter(connectors))
+    modes = connectors[target]["modes"]
+    active = parse_modetest_active_modes(crtcs.stdout) if succeeded(crtcs) else []
+    current = next((m for m in active if m in modes), None)
+    return {
+        "connector": target,
+        "external": bool(external),
+        "others": [n for n in connectors if n != target],
+        "modes": modes,
+        "current": current,
+    }
+
+
+def choose_display(pending):
+    """Pick the session's display mode while still in Gaming Mode."""
+    info = display_info()
+    if not info:
+        return
+    forced = pending.get("display_mode")
+    if forced and forced in info["modes"]:
+        mode = forced
+    else:
+        if forced:
+            log(f"{forced} isn't offered by {info['connector']}, matching Gaming Mode")
+        mode = info["current"]
+    # External displays always get Gaming Mode's layout (external only). The
+    # internal panel only needs anything when its mode isn't KWin's default,
+    # the panel's preferred mode (listed first).
+    if not info["external"] and mode in (None, info["modes"][0]):
+        return
+    pending["display"] = {"connector": info["connector"], "mode": mode,
+                          "disable": info["others"] if info["external"] else []}
+    write_json(PENDING, pending)
+    log(f"display: {info['connector']} at {mode or 'its default mode'}, "
+        f"off: {pending['display']['disable'] or 'nothing'}")
+
+
+def kscreen_outputs():
+    """{output name: {"enabled", "mode" (current mode id), "modes": {mode name: id}}}
+    from `kscreen-doctor -j`."""
+    result = run(["kscreen-doctor", "-j"])
+    if not succeeded(result):
+        return {}
+    try:
+        outputs = json.loads(result.stdout[result.stdout.index("{"):])["outputs"]
+    except (ValueError, KeyError):
+        return {}
+    return {
+        o.get("name"): {
+            "enabled": bool(o.get("enabled")),
+            "mode": str(o.get("currentModeId")),
+            "modes": {mode_name(m["size"]["width"], m["size"]["height"], m["refreshRate"]): str(m["id"])
+                      for m in o.get("modes", [])},
+        }
+        for o in outputs
+    }
+
+
+def display_changes(outputs, display):
+    """kscreen-doctor arguments that turn the current outputs into `display`.
+    Every change makes a TV re-sync (a second or two of black), so only what
+    differs is changed."""
+    args = [f"output.{name}.disable" for name in display["disable"]
+            if outputs.get(name, {}).get("enabled")]
+    target = outputs.get(display["connector"], {})
+    if not target.get("enabled"):
+        args.append(f"output.{display['connector']}.enable")
+    if display.get("mode"):
+        mode_id = closest_mode_id(target.get("modes", {}), display["mode"])
+        if not mode_id:
+            log(f"KWin doesn't offer {display['mode']} on {display['connector']}")
+        elif mode_id != target.get("mode"):
+            args.append(f"output.{display['connector']}.mode.{mode_id}")
+    return args
+
+
+def closest_mode_id(ids, wanted):
+    """kscreen's refresh rates differ slightly from modetest's (59.999 vs 60.00)."""
+    target = parse_mode_name(wanted)
+    if not target:
+        return None
+    best = None
+    for name, mode_id in ids.items():
+        width, height, refresh = parse_mode_name(name)
+        if (width, height) == target[:2] and abs(refresh - target[2]) < 0.05:
+            if best is None or abs(refresh - target[2]) < best[0]:
+                best = (abs(refresh - target[2]), mode_id)
+    return best[1] if best else None
+
+
+def apply_display(display):
+    """Set the session's outputs like Gaming Mode had them. KWin saves this to
+    kwinoutputconfig.json, which restore() puts back."""
+    if not display or not shutil.which("kscreen-doctor"):
+        return
+    args = display_changes(kscreen_outputs(), display)
+    if not args:
+        log("display already set up as wanted")
+        return
+    result = run(["kscreen-doctor", *args])
+    log(f"display set: {' '.join(args)}" if succeeded(result)
+        else f"kscreen-doctor failed: {result.stdout.strip() if result else 'not found'}")
+
+
+def backup_output_config():
+    backup = KWIN_OUTPUT_CONFIG + ".quickscope"
+    if os.path.exists(KWIN_OUTPUT_CONFIG):
+        shutil.copy2(KWIN_OUTPUT_CONFIG, backup)
+        record_undo("output_config", {"backup": backup})
+    else:
+        record_undo("output_config", {"backup": None})
+
+
+def restore_output_config(entry):
+    backup = entry.get("backup")
+    if backup and os.path.exists(backup):
+        os.replace(backup, KWIN_OUTPUT_CONFIG)
+    elif not backup:
+        remove(KWIN_OUTPUT_CONFIG)
+    log("restored KWin's display configuration")
+
+
 def plugged_in():
     """True on mains power, or on a device without a battery."""
     has_battery = False
@@ -768,6 +968,8 @@ def restore(reload=True, restart_shell=False):
             systemctl("start", "--no-block", unit)
     if "splash_engine" in undo:
         restore_splash(undo["splash_engine"])
+    if "output_config" in undo:
+        restore_output_config(undo["output_config"])
     if "brightness" in undo and write_backlight(undo["brightness"]["raw"]):
         log(f"restored brightness {undo['brightness']['raw']}")
     perf = undo.get("performance", {})
@@ -936,6 +1138,7 @@ def prepare():
     disable_splash()
 
     choose_brightness(pending)
+    choose_display(pending)
 
     masked = []
     for unit in [PLASMASHELL_UNIT, *QUIET_MASKED_UNITS]:
@@ -1195,6 +1398,9 @@ def launch():
         log(f"KWin ready after {time.monotonic() - started:.1f}s")
     else:
         log("KWin never appeared on D-Bus, launching anyway")
+    if pending.get("display"):
+        backup_output_config()
+        apply_display(pending["display"])
     if loading and loading.poll() is not None:
         log("loading screen exited early, starting it again")
         loading = show_loading_screen(starting)
@@ -1280,6 +1486,9 @@ def main(argv):
         return prepare()
     if command == "--restore":
         restore()
+        return 0
+    if command == "--displays":
+        print(json.dumps(display_info()))
         return 0
     if command == "--uninstall":
         uninstall()

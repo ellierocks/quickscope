@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import pwd
+import re
 import shlex
 import shutil
 import time
@@ -20,6 +21,9 @@ SETTINGS_DEFAULTS = {
     "lock_brightness": True,
     "match_gaming_brightness": True,
     "brightness_pct": 50,
+    # "" matches Gaming Mode's display mode; otherwise a mode like
+    # "1920x1080@60.00", used when the display offers it.
+    "display_mode": "",
     "favorites": [],
     # Per-shortcut overrides, {"<appid>": "direct"}. Shortcuts default to
     # "hybrid" (launched directly, desktop Steam started alongside for its
@@ -257,11 +261,26 @@ class Plugin:
             value = {str(int(k)): v for k, v in value.items() if v in LAUNCH_MODES}
         elif key == "power_profile" and value not in POWER_PROFILES:
             raise ValueError(f"Unknown power profile: {value}")
+        elif key == "display_mode":
+            value = str(value or "")
+            if value and not re.fullmatch(r"\d+x\d+@\d+\.\d\d", value):
+                raise ValueError(f"Bad display mode: {value}")
         elif isinstance(SETTINGS_DEFAULTS[key], bool):
             value = bool(value)
         self.settings[key] = value
         self._save_settings()
         return self.settings
+
+    async def get_displays(self):
+        """The display an app would use and the modes it offers, or None."""
+        code, out = await _run_launcher("--displays")
+        if code != 0:
+            decky.logger.warning(f"launcher --displays failed: {out}")
+            return None
+        try:
+            return json.loads(out.splitlines()[-1])
+        except (ValueError, IndexError):
+            return None
 
     async def get_environment(self):
         return {
@@ -308,6 +327,7 @@ class Plugin:
                 "lock_brightness": s["lock_brightness"],
                 "match_gaming_brightness": s["match_gaming_brightness"],
                 "brightness_pct": s["brightness_pct"],
+                "display_mode": s["display_mode"],
             }
 
             path = _paths()["pending"]

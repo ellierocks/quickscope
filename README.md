@@ -75,6 +75,7 @@ Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quicksc
 | Power profile: Automatic (Battery saver on battery, High performance when plugged in), High performance, or Battery saver (about 40% less chip power while streaming) | Automatic |
 | Starting brightness | Matches Gaming Mode; or a fixed level |
 | Lock brightness (stops KDE's power management changing it) | On |
+| Display mode (on an external display, or a built-in panel with several modes): match Gaming Mode, or pick one of the display's own modes | Match Gaming Mode |
 
 There's no Quick Access menu outside Gaming Mode, so Quickscope adds its own controls:
 
@@ -84,6 +85,7 @@ There's no Quick Access menu outside Gaming Mode, so Quickscope adds its own con
 ## Troubleshooting
 
 - **Stuck on the desktop?** Use *Return to Gaming Mode*, or run `steamos-session-select gamescope`.
+- **No loading screen when docked?** Expected: a TV takes a few seconds to re-sync after the session switch, and the app is usually open before the picture comes back.
 - **Decky disappeared after several very short sessions in a row?** Decky's crash protection disables it when Steam's UI goes away three times within about a minute, and each Quickscope round trip closes Steam's UI twice. Restart the Deck (or `sudo systemctl start plugin_loader`) to bring it back. Normal sessions longer than a minute don't trigger it.
 - **Logs:** `~/.local/state/quickscope/launcher.log` (launch timings and every change made or undone), and Decky's log in `~/homebrew/logs/Quickscope/`.
 - **Undo everything by hand:** `python3 ~/.local/state/quickscope/quickscope_launcher.py --restore`
@@ -105,6 +107,7 @@ There's no Quick Access menu outside Gaming Mode, so Quickscope adds its own con
 | No splash screen | `Engine=none` in `~/.config/ksplashrc` (KDE's own switch), restored afterwards |
 | No Plasma panel | `systemctl --user mask --runtime plasma-plasmashell.service` |
 | Brightness | Writes the backlight (`/sys/class/backlight/*/brightness`) and re-applies it if KDE changes it (for the whole session with the lock, otherwise while the desktop starts); the original level is restored afterwards |
+| Display | Gaming Mode's mode is read with `modetest` before switching, then set with `kscreen-doctor` (external displays: the Deck's screen off, as in Gaming Mode). Only what differs is changed, since every change makes a TV re-sync. KDE's new-display dialog (`plasma-kscreen-osd.service`) is masked for the session, and `~/.config/kwinoutputconfig.json` is restored afterwards |
 | Brightness shortcut | Reads the built-in controller's hidraw reports without grabbing them, so Steam and the app still get every input |
 | Power profile *(setting)* | High performance: GPU level `high`, `performance` governor. Battery saver: GPU `auto`, `powersave` governor, CPU boost off. Automatic picks one from `/sys/class/power_supply` and switches if you plug in or unplug. Set with `steamosctl`, re-applied while running, restored afterwards |
 

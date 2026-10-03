@@ -14,10 +14,12 @@ import { useEffect, useMemo, useState } from "react";
 import { FaCrosshairs } from "react-icons/fa";
 
 import {
+  DisplayInfo,
   Environment,
   PowerProfile,
   Settings,
   cancelPending,
+  getDisplays,
   getEnvironment,
   getSettings,
   setSetting,
@@ -41,9 +43,28 @@ const POWER_PROFILES: { data: PowerProfile; label: string; description: string }
   {
     data: "battery",
     label: "Battery saver",
-    description: "Turns off CPU boost. Uses about half the chip power while streaming.",
+    description: "Turns off CPU boost. Uses about 40% less chip power while streaming.",
   },
 ];
+
+function modeLabel(mode: string): string {
+  const m = mode.match(/^(\d+)x(\d+)@([\d.]+)$/);
+  if (!m) return mode;
+  const hz = Number(m[3]);
+  return `${m[1]} × ${m[2]}, ${Number.isInteger(hz) ? hz : hz.toFixed(2)} Hz`;
+}
+
+/** Largest resolution first, then highest refresh rate. */
+function sortModes(modes: string[]): string[] {
+  const key = (mode: string) => {
+    const [w, h, hz] = mode.split(/[x@]/).map(Number);
+    return [w * h, hz];
+  };
+  return [...modes].sort((a, b) => {
+    const [ka, kb] = [key(a), key(b)];
+    return kb[0] - ka[0] || kb[1] - ka[1];
+  });
+}
 
 const RECENT_COUNT = 8;
 const SEARCH_COUNT = 20;
@@ -95,10 +116,12 @@ function Content() {
   const [apps] = useState<LibraryApp[]>(() => getLibraryApps());
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
+  const [display, setDisplay] = useState<DisplayInfo | null>(null);
 
   useEffect(() => {
     getSettings().then(setSettings);
     getEnvironment().then(setEnv);
+    getDisplays().then(setDisplay);
   }, []);
 
   const pinned = useMemo(() => {
@@ -232,44 +255,81 @@ function Content() {
         </PanelSectionRow>
       </PanelSection>
 
-      <PanelSection title="Brightness">
-        <PanelSectionRow>
-          <ToggleField
-            label="Match Gaming Mode brightness"
-            description="Start the app at the brightness you had when launching."
-            checked={settings.match_gaming_brightness}
-            onChange={async (v) => {
-              // Start the slider at the current brightness.
-              if (!v) {
-                const current = await getSteamBrightness();
-                if (current !== null) await update("brightness_pct", Math.max(5, current));
-              }
-              update("match_gaming_brightness", v);
-            }}
-          />
-        </PanelSectionRow>
-        {!settings.match_gaming_brightness && (
+      {display && (display.external || display.modes.length > 1) && (
+        <PanelSection title={display.external ? "External display" : "Display"}>
           <PanelSectionRow>
-            <SliderField
-              label="Starting brightness"
-              value={settings.brightness_pct}
-              min={5}
-              max={100}
-              step={5}
-              showValue
-              onChange={(v) => update("brightness_pct", v)}
+            <ToggleField
+              label="Match Gaming Mode"
+              description={
+                display.external
+                  ? "Use the resolution and refresh rate Gaming Mode uses on this display. The Deck's screen stays off, as in Gaming Mode."
+                  : "Use the refresh rate Gaming Mode uses."
+              }
+              checked={!settings.display_mode}
+              onChange={(v) =>
+                update("display_mode", v ? "" : display.current ?? display.modes[0])
+              }
             />
           </PanelSectionRow>
-        )}
-        <PanelSectionRow>
-          <ToggleField
-            label="Lock brightness"
-            description="Stop the desktop's power management from dimming or changing the screen. To change the brightness while an app runs, hold Steam and push the left stick up or down."
-            checked={settings.lock_brightness}
-            onChange={(v) => update("lock_brightness", v)}
-          />
-        </PanelSectionRow>
-      </PanelSection>
+          {!!settings.display_mode && (
+            <PanelSectionRow>
+              <DropdownItem
+                label="Display mode"
+                description={
+                  display.modes.includes(settings.display_mode)
+                    ? undefined
+                    : "This display doesn't offer the saved mode, so Gaming Mode's is used."
+                }
+                rgOptions={sortModes(display.modes).map((m) => ({ data: m, label: modeLabel(m) }))}
+                selectedOption={settings.display_mode}
+                onChange={(o) => update("display_mode", o.data)}
+              />
+            </PanelSectionRow>
+          )}
+        </PanelSection>
+      )}
+
+      {/* The Deck's own screen is off on an external display. */}
+      {!display?.external && (
+        <PanelSection title="Brightness">
+          <PanelSectionRow>
+            <ToggleField
+              label="Match Gaming Mode brightness"
+              description="Start the app at the brightness you had when launching."
+              checked={settings.match_gaming_brightness}
+              onChange={async (v) => {
+                // Start the slider at the current brightness.
+                if (!v) {
+                  const current = await getSteamBrightness();
+                  if (current !== null) await update("brightness_pct", Math.max(5, current));
+                }
+                update("match_gaming_brightness", v);
+              }}
+            />
+          </PanelSectionRow>
+          {!settings.match_gaming_brightness && (
+            <PanelSectionRow>
+              <SliderField
+                label="Starting brightness"
+                value={settings.brightness_pct}
+                min={5}
+                max={100}
+                step={5}
+                showValue
+                onChange={(v) => update("brightness_pct", v)}
+              />
+            </PanelSectionRow>
+          )}
+          <PanelSectionRow>
+            <ToggleField
+              label="Lock brightness"
+              description="Stop the desktop's power management from dimming or changing the screen. To change the brightness while an app runs, hold Steam and push the left stick up or down."
+              checked={settings.lock_brightness}
+              onChange={(v) => update("lock_brightness", v)}
+            />
+          </PanelSectionRow>
+        </PanelSection>
+      )}
     </>
   );
 }
