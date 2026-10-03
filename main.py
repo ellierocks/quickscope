@@ -29,6 +29,10 @@ SETTINGS_DEFAULTS = {
     "display_hdr": False,
     # Percent; KDE would otherwise pick its own (170% on a 4K TV).
     "display_scale": 100,
+    # Opt-in: Moonlight settings per display ({display id: profile}), swapped
+    # into Moonlight.conf for the session. Off unless the user turns it on.
+    "moonlight_override": False,
+    "moonlight_profiles": {},
     "favorites": [],
     # Per-shortcut overrides, {"<appid>": "direct"}. Shortcuts default to
     # "hybrid" (launched directly, desktop Steam started alongside for its
@@ -40,6 +44,9 @@ SETTINGS_DEFAULTS = {
 WAYLAND_SESSION = "plasma.desktop"
 LAUNCH_MODES = ("hybrid", "direct")
 POWER_PROFILES = ("auto", "performance", "battery")
+# Moonlight's videocfg: auto, H.264, HEVC, AV1, PyroWave (Nonary's fork). 3 is
+# a deprecated HEVC HDR value.
+MOONLIGHT_CODECS = (0, 1, 2, 4, 5)
 DEFAULT_SHORTCUT_MODE = "hybrid"
 
 # Must match PENDING_MAX_AGE in quickscope_launcher.py.
@@ -123,6 +130,32 @@ def _install_launcher():
     os.makedirs(os.path.dirname(dest), exist_ok=True)
     shutil.copyfile(source, dest)
     return dest
+
+
+def _clean_moonlight_profile(profile):
+    clean = {
+        "name": str(profile.get("name", ""))[:60],
+        "width": max(320, min(7680, int(profile["width"]))),
+        "height": max(200, min(4320, int(profile["height"]))),
+        "fps": max(10, min(240, int(profile["fps"]))),
+        "vsync": bool(profile["vsync"]),
+        "framepacing": bool(profile["framepacing"]),
+    }
+    # Added later; profiles without them leave Moonlight's own value alone.
+    if profile.get("bitrate") is not None:
+        clean["bitrate"] = max(500, min(1000000, int(profile["bitrate"])))  # kbps
+    if profile.get("hdr") is not None:
+        clean["hdr"] = bool(profile["hdr"])
+    if profile.get("codec") is not None and int(profile["codec"]) in MOONLIGHT_CODECS:
+        clean["codec"] = int(profile["codec"])
+    if profile.get("vrr_capable") is not None:
+        clean["vrr_capable"] = bool(profile["vrr_capable"])
+    if profile.get("vrr") is not None:
+        clean["vrr"] = bool(profile["vrr"])
+        if clean["vrr"]:
+            # The VRR fork only uses VRR with V-Sync on.
+            clean["vsync"] = True
+    return clean
 
 
 async def _run_launcher(*args):
@@ -262,6 +295,9 @@ class Plugin:
             value = max(5, min(100, int(value)))
         elif key == "display_scale":
             value = max(100, min(300, int(value)))
+        elif key == "moonlight_profiles":
+            value = {str(k): _clean_moonlight_profile(p) for k, p in value.items()
+                     if re.fullmatch(r"[\w.-]{1,40}", str(k))}
         elif key == "favorites":
             value = [int(v) for v in value]
         elif key == "launch_modes":
@@ -283,6 +319,16 @@ class Plugin:
         code, out = await _run_launcher("--displays")
         if code != 0:
             decky.logger.warning(f"launcher --displays failed: {out}")
+            return None
+        try:
+            return json.loads(out.splitlines()[-1])
+        except (ValueError, IndexError):
+            return None
+
+    async def get_moonlight_settings(self):
+        """Moonlight's own current values (read only), to start a new profile from."""
+        code, out = await _run_launcher("--moonlight-settings")
+        if code != 0:
             return None
         try:
             return json.loads(out.splitlines()[-1])
@@ -337,6 +383,8 @@ class Plugin:
                 "display_mode": s["display_mode"],
                 "display_hdr": s["display_hdr"],
                 "display_scale": s["display_scale"],
+                "moonlight_override": s["moonlight_override"],
+                "moonlight_profiles": s["moonlight_profiles"],
             }
 
             path = _paths()["pending"]

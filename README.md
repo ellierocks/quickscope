@@ -62,9 +62,11 @@ Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quicksc
 
 ### Moonlight
 
-- Add Moonlight (Flatpak) as a non-Steam shortcut and leave it on **Hybrid**. Your Moonlight settings are used as-is.
+- Add Moonlight (Flatpak) as a non-Steam shortcut and leave it on **Hybrid**. Your Moonlight settings are used as-is unless you turn on the override below.
 - To jump straight into a stream, use the launch options `run com.moonlight_stream.Moonlight stream <host> "<app>"`. Moonlight then closes when the stream ends, which returns you to Gaming Mode.
 - Quit a stream with **L1 + R1 + Start + Select**.
+
+**Per-display Moonlight settings (optional).** *Settings → Moonlight settings* opens a page with an **Override Moonlight settings** toggle, off by default. Turned on, each display gets its own resolution (including above the screen's, for supersampling), frame rate, codec, bitrate, V-Sync, frame pacing and HDR, picked automatically by the display Moonlight runs on: one set for the Deck's screen, another for your TV. With [Nonary's VRR fork](https://github.com/Nonary/moonlight-qt) it also offers PyroWave and, on VRR displays, VRR with the fork's VRR frame rates; neither appears with upstream Moonlight. Quickscope swaps the values into Moonlight's settings for the session and puts back only the ones it changed, so anything you change in Moonlight meanwhile stays.
 
 ### Settings
 

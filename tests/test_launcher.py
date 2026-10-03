@@ -422,6 +422,93 @@ class Display(LauncherTestCase):
             self.assertEqual(f.read(), "original")
 
 
+MOONLIGHT_CONF = """\
+[General]
+bitrate=150000
+fps=60
+framepacing=true
+height=800
+vsync=true
+width=1280
+
+[hosts]
+1\\apps\\1\\name=Desktop
+"""
+
+
+class Moonlight(LauncherTestCase):
+    fake_modetest = Display.fake_modetest
+
+    def setUp(self):
+        super().setUp()
+        self.fake_modetest()
+        self.conf = os.path.join(self.home, ".var", "app", "com.moonlight_stream.Moonlight", "config",
+                                 "Moonlight Game Streaming Project", "Moonlight.conf")
+        self.l.write_file(self.conf, MOONLIGHT_CONF)
+        self.pending = {
+            "command": "/usr/bin/flatpak run com.moonlight_stream.Moonlight",
+            "moonlight_override": True,
+            "moonlight_profiles": {"SAM-71B5": {"name": "SAMSUNG", "width": 3840, "height": 2160, "fps": 60,
+                                                "vsync": False, "framepacing": False,
+                                                "bitrate": 80000, "hdr": True}},
+        }
+
+    def conf_values(self):
+        return self.l.read_ini_section(self.conf)
+
+    def test_display_identity(self):
+        self.assertEqual(self.l.edid_identity(bytes.fromhex("".join(TV_EDID))), ("SAM-71B5", "SAMSUNG"))
+        info = self.l.display_info()
+        self.assertEqual((info["id"], info["name"]), ("SAM-71B5", "SAMSUNG"))
+
+    def test_override_and_restore(self):
+        self.l.override_moonlight(self.pending)
+        values = self.conf_values()
+        self.assertEqual((values["width"], values["height"], values["vsync"], values["framepacing"]),
+                         ("3840", "2160", "false", "false"))
+        self.assertEqual((values["bitrate"], values["hdr"]), ("80000", "true"))
+        self.l.restore(reload=False)
+        with open(self.conf) as f:
+            self.assertEqual(f.read(), MOONLIGHT_CONF)
+
+    def test_changes_made_in_moonlight_are_kept(self):
+        self.l.override_moonlight(self.pending)
+        self.l.write_ini_values(self.conf, {"vsync": "true", "bitrate": "60000"})
+        self.l.restore(reload=False)
+        values = self.conf_values()
+        self.assertEqual((values["width"], values["vsync"], values["bitrate"]), ("1280", "true", "60000"))
+        # Not in the original file, so restoring removes it again.
+        self.assertNotIn("hdr", values)
+
+    def test_fork_only_settings_skip_upstream_moonlight(self):
+        profile = self.pending["moonlight_profiles"]["SAM-71B5"]
+        profile.update(codec=5, vrr=True)
+        self.l.override_moonlight(self.pending)
+        values = self.conf_values()
+        self.assertNotIn("enablevrr", values)
+        self.assertNotIn("videocfg", values)
+        self.l.restore(reload=False)
+        # With the fork's key present, both are applied.
+        self.l.write_ini_values(self.conf, {"enablevrr": "false", "videocfg": "2"})
+        self.l.override_moonlight(self.pending)
+        values = self.conf_values()
+        self.assertEqual((values["enablevrr"], values["videocfg"]), ("true", "5"))
+
+    def test_settings_file_prefers_the_flatpak(self):
+        native = os.path.join(self.home, ".config", "Moonlight Game Streaming Project", "Moonlight.conf")
+        self.l.write_file(native, "[General]\nwidth=1920\n")
+        self.assertEqual(self.l.moonlight_conf(), self.conf)
+        self.assertEqual(self.l.moonlight_conf({"command": "/opt/moonlight/moonlight"}), native)
+
+    def test_nothing_changes_without_the_toggle_or_a_profile(self):
+        for pending in (dict(self.pending, moonlight_override=False),
+                        dict(self.pending, moonlight_profiles={}),
+                        dict(self.pending, command="/usr/bin/retroarch")):
+            self.l.override_moonlight(pending)
+            with open(self.conf) as f:
+                self.assertEqual(f.read(), MOONLIGHT_CONF)
+
+
 class Combo(LauncherTestCase):
     def report(self, steam, y):
         r = bytearray(64)

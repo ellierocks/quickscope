@@ -26,6 +26,7 @@ import {
 } from "./backend";
 import { patchGamePage } from "./gamepage";
 import { addLaunchingRoute } from "./launching";
+import { addMoonlightRoute, openMoonlightPage } from "./moonlight";
 import { MODE_NAMES, effectiveMode, launch, toast } from "./launch";
 import { LibraryApp, getLibraryApps, getSteamBrightness } from "./library";
 
@@ -253,6 +254,15 @@ function Content() {
             onChange={(o) => update("power_profile", o.data)}
           />
         </PanelSectionRow>
+        <PanelSectionRow>
+          <ButtonItem
+            layout="below"
+            description={settings.moonlight_override ? "Overriding Moonlight's settings per display." : undefined}
+            onClick={openMoonlightPage}
+          >
+            Moonlight settings
+          </ButtonItem>
+        </PanelSectionRow>
       </PanelSection>
 
       {display && (
@@ -362,6 +372,7 @@ function Content() {
 export default definePlugin(() => {
   const unpatchGamePage = patchGamePage();
   const removeLaunchingRoute = addLaunchingRoute();
+  const removeMoonlightRoute = addMoonlightRoute();
   return {
     name: "Quickscope",
     titleView: <div className={staticClasses.Title}>Quickscope</div>,
@@ -370,6 +381,7 @@ export default definePlugin(() => {
     onDismount() {
       unpatchGamePage();
       removeLaunchingRoute();
+      removeMoonlightRoute();
     },
   };
 });

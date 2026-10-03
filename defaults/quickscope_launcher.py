@@ -10,6 +10,8 @@ returns to Gaming Mode when the app exits.
                staged launch (run by the Decky backend just before switching)
   --restore    undo any one-shot tweaks
   --displays   print the display an app would use and its modes, as JSON
+  --moonlight-settings
+               print Moonlight's current resolution, frame rate and sync settings
   --uninstall  undo tweaks and remove the systemd unit
 
 Every tweak lives in ~/.config or /run and is recorded in undo.json, so
@@ -746,6 +748,21 @@ def edid_supports_hdr(edid):
     return False
 
 
+def edid_identity(edid):
+    """(id, name) of a display from its EDID: manufacturer and product code,
+    e.g. "SAM-71B5", and the monitor name descriptor, e.g. "SAMSUNG"."""
+    if len(edid) < 128 or edid[:8] != bytes.fromhex("00ffffffffffff00"):
+        return None, None
+    packed = int.from_bytes(edid[8:10], "big")
+    maker = "".join(chr(((packed >> shift) & 0x1F) + 64) for shift in (10, 5, 0))
+    display_id = f"{maker}-{int.from_bytes(edid[10:12], 'little'):04X}"
+    name = None
+    for offset in (54, 72, 90, 108):
+        if edid[offset:offset + 3] == b"\0\0\0" and edid[offset + 3] == 0xFC:
+            name = edid[offset + 5:offset + 18].split(b"\n")[0].decode("ascii", "replace").strip()
+    return display_id, name or display_id
+
+
 def parse_modetest_connectors(text):
     """{connector: {"connected", "modes": [mode name, ...], "hdr_capable",
     "hdr" (scanning out in BT.2020)}} from `modetest -c`."""
@@ -754,7 +771,8 @@ def parse_modetest_connectors(text):
     for line in text.splitlines():
         m = MODETEST_CONNECTOR.match(line)
         if m:
-            current = {"connected": m.group(1) == "connected", "modes": [], "hdr_capable": False, "hdr": False}
+            current = {"connected": m.group(1) == "connected", "modes": [], "hdr_capable": False, "hdr": False,
+                       "vrr_capable": False, "id": None, "name": None}
             connectors[m.group(2)] = current
             in_props = False
             continue
@@ -773,11 +791,14 @@ def parse_modetest_connectors(text):
             elif prop == "EDID" and edid is not None and re.fullmatch(r"[0-9a-f]+", stripped):
                 edid += bytes.fromhex(stripped)
                 current["hdr_capable"] = edid_supports_hdr(edid)
+                current["id"], current["name"] = edid_identity(edid)
             elif prop == "Colorspace" and stripped.startswith("enums:"):
                 enums = stripped
             elif prop == "Colorspace" and stripped.startswith("value:"):
                 value = stripped.split(":", 1)[1].strip()
                 current["hdr"] = re.search(rf"\bBT2020_\w+={value}\b", enums) is not None
+            elif prop == "vrr_capable" and stripped.startswith("value:"):
+                current["vrr_capable"] = stripped.split(":", 1)[1].strip() == "1"
             continue
         m = MODETEST_MODE.match(line)
         if m:
@@ -838,6 +859,11 @@ def display_info():
         "current": current,
         "hdr_capable": connectors[target]["hdr_capable"],
         "hdr": connectors[target]["hdr"],
+        "vrr_capable": connectors[target]["vrr_capable"],
+        # Stable per display model, for per-display Moonlight settings.
+        "id": connectors[target]["id"] or target,
+        "name": ("Built-in screen" if is_internal_connector(target)
+                 else connectors[target]["name"] or target),
     }
 
 
@@ -964,6 +990,134 @@ def restore_output_config(entry):
     log("restored KWin's display configuration")
 
 
+# --- Moonlight settings override (opt-in) -------------------------------------
+
+MOONLIGHT_FLATPAK = "com.moonlight_stream.Moonlight"
+MOONLIGHT_CONF_NAME = os.path.join("Moonlight Game Streaming Project", "Moonlight.conf")
+# Profile field -> Moonlight.conf key in [General].
+MOONLIGHT_KEYS = {"width": "width", "height": "height", "fps": "fps", "bitrate": "bitrate",
+                  "vsync": "vsync", "framepacing": "framepacing", "hdr": "hdr",
+                  # 0 auto, 1 H.264, 2 HEVC, 4 AV1, 5 PyroWave (Nonary's fork).
+                  "codec": "videocfg",
+                  # Nonary's VRR fork only.
+                  "vrr": "enablevrr"}
+# Only Nonary's VRR fork saves this key.
+MOONLIGHT_FORK_KEY = "enablevrr"
+
+
+def moonlight_conf(pending=None):
+    """Moonlight's settings file: the Flatpak's, or a native install's. Without
+    a launch to go by, the Flatpak's wins whenever it exists: a stale native
+    file can be left over from an AppImage or an old install."""
+    flatpak = os.path.join(HOME, ".var", "app", MOONLIGHT_FLATPAK, "config", MOONLIGHT_CONF_NAME)
+    native = os.path.join(HOME, ".config", MOONLIGHT_CONF_NAME)
+    command = (pending or {}).get("command") or ""
+    if command and MOONLIGHT_FLATPAK not in command and os.path.exists(native):
+        return native
+    return flatpak if os.path.exists(flatpak) or not os.path.exists(native) else native
+
+
+def is_moonlight(pending):
+    """The Flatpak, an AppImage or a native build: all have it in the command."""
+    return "moonlight" in (pending.get("command") or "").lower()
+
+
+def read_ini_section(path, section="General"):
+    values, current = {}, None
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if line.startswith("["):
+                    current = line.strip("[]")
+                elif current == section and "=" in line:
+                    key, value = line.split("=", 1)
+                    values[key] = value
+    except OSError:
+        return None
+    return values
+
+
+def write_ini_values(path, changes, section="General"):
+    """Set (or, with None, remove) keys in one section, keeping everything else."""
+    with open(path) as f:
+        lines = f.read().split("\n")
+    pending, current, out, inserted = dict(changes), None, [], False
+    for line in lines:
+        if line.startswith("["):
+            if current == section and not inserted:
+                out.extend(f"{k}={v}" for k, v in pending.items() if v is not None)
+                inserted = True
+            current = line.strip("[]")
+        elif current == section and "=" in line:
+            key = line.split("=", 1)[0]
+            if key in pending:
+                value = pending.pop(key)
+                if value is not None:
+                    out.append(f"{key}={value}")
+                continue
+        out.append(line)
+    if not inserted:
+        if current != section:
+            out.append(f"[{section}]")
+        out.extend(f"{k}={v}" for k, v in pending.items() if v is not None)
+    write_file(path, "\n".join(out))
+
+
+def moonlight_values(profile):
+    """Moonlight.conf strings for a profile."""
+    values = {}
+    for field, key in MOONLIGHT_KEYS.items():
+        if field in profile:
+            value = profile[field]
+            values[key] = ("true" if value else "false") if isinstance(value, bool) else str(int(value))
+    return values
+
+
+def override_moonlight(pending):
+    """Swap in the user's settings for this display, while still in Gaming
+    Mode. Only runs when the user turned the override on and set a profile."""
+    if not pending.get("moonlight_override") or not is_moonlight(pending):
+        return
+    info = display_info() or {}
+    profile = (pending.get("moonlight_profiles") or {}).get(info.get("id"))
+    if not profile:
+        log(f"no Moonlight settings saved for {info.get('name') or 'this display'}, leaving Moonlight's own")
+        return
+    path = moonlight_conf(pending)
+    original = read_ini_section(path)
+    if original is None:
+        log(f"Moonlight's settings not found at {path}")
+        return
+    wanted = moonlight_values(profile)
+    if MOONLIGHT_FORK_KEY not in original:
+        # Upstream Moonlight: no VRR, no PyroWave, whatever the profile says.
+        wanted.pop(MOONLIGHT_KEYS["vrr"], None)
+        if wanted.get(MOONLIGHT_KEYS["codec"]) == "5":
+            del wanted[MOONLIGHT_KEYS["codec"]]
+    changes = {k: v for k, v in wanted.items() if original.get(k) != v}
+    if not changes:
+        log(f"Moonlight already set up for {info.get('name')}")
+        return
+    record_undo("moonlight", {"path": path, "set": changes,
+                              "original": {k: original.get(k) for k in changes}})
+    write_ini_values(path, changes)
+    log(f"Moonlight settings for {info.get('name')}: {changes}")
+
+
+def restore_moonlight(entry):
+    """Put back only keys still holding what Quickscope set: anything changed
+    in Moonlight during the session is the user's and stays."""
+    current = read_ini_section(entry["path"])
+    if current is None:
+        return
+    back = {k: entry["original"][k] for k, v in entry["set"].items() if current.get(k) == v}
+    kept = sorted(set(entry["set"]) - set(back))
+    if back:
+        write_ini_values(entry["path"], back)
+    log(f"restored Moonlight settings {sorted(back)}" + (f", kept your changes to {kept}" if kept else ""))
+
+
 def plugged_in():
     """True on mains power, or on a device without a battery."""
     has_battery = False
@@ -1023,6 +1177,8 @@ def restore(reload=True, restart_shell=False):
             systemctl("start", "--no-block", unit)
     if "splash_engine" in undo:
         restore_splash(undo["splash_engine"])
+    if "moonlight" in undo:
+        restore_moonlight(undo["moonlight"])
     if "output_config" in undo:
         restore_output_config(undo["output_config"])
     if "brightness" in undo and write_backlight(undo["brightness"]["raw"]):
@@ -1194,6 +1350,7 @@ def prepare():
 
     choose_brightness(pending)
     choose_display(pending)
+    override_moonlight(pending)
 
     masked = []
     for unit in [PLASMASHELL_UNIT, *QUIET_MASKED_UNITS]:
@@ -1544,6 +1701,12 @@ def main(argv):
         return 0
     if command == "--displays":
         print(json.dumps(display_info()))
+        return 0
+    if command == "--moonlight-settings":
+        current = read_ini_section(moonlight_conf()) or {}
+        values = {field: current.get(key) for field, key in MOONLIGHT_KEYS.items()}
+        values["vrr_fork"] = MOONLIGHT_FORK_KEY in current
+        print(json.dumps(values))
         return 0
     if command == "--uninstall":
         uninstall()

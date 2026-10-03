@@ -13,6 +13,9 @@ export interface Settings {
   display_hdr: boolean;
   /** Percent, 100-300. */
   display_scale: number;
+  moonlight_override: boolean;
+  /** Keyed by display id, e.g. "SAM-71B5". */
+  moonlight_profiles: Record<string, MoonlightProfile>;
   favorites: number[];
   launch_modes: Record<string, ShortcutMode>;
 }
@@ -41,7 +44,41 @@ export interface DisplayInfo {
   hdr_capable: boolean;
   /** Gamescope is outputting HDR. */
   hdr: boolean;
+  /** The display (and its connection) supports variable refresh rate. */
+  vrr_capable: boolean;
+  /** Stable per display model, e.g. "SAM-71B5". */
+  id: string;
+  /** E.g. "SAMSUNG", or "Built-in screen". */
+  name: string;
 }
+
+export interface MoonlightProfile {
+  /** The display's name when the profile was made. */
+  name: string;
+  width: number;
+  height: number;
+  fps: number;
+  vsync: boolean;
+  framepacing: boolean;
+  /** kbps. This and the fields below are missing in older profiles. */
+  bitrate?: number;
+  hdr?: boolean;
+  /** Moonlight's videocfg: 0 auto, 1 H.264, 2 HEVC, 4 AV1, 5 PyroWave. */
+  codec?: number;
+  /** Nonary's VRR fork only. */
+  vrr?: boolean;
+  /** Whether the display supported VRR when the profile was made. */
+  vrr_capable?: boolean;
+}
+
+/** Moonlight.conf's raw values, as strings ("1280", "true"), or null if unset. */
+export type MoonlightSettings = Record<
+  "width" | "height" | "fps" | "bitrate" | "vsync" | "framepacing" | "hdr" | "codec" | "vrr",
+  string | null
+> & {
+  /** Nonary's VRR fork is installed (its settings have VRR keys). */
+  vrr_fork: boolean;
+};
 
 export interface LaunchSpec {
   appid: number;
@@ -62,6 +99,7 @@ export const getSettings = callable<[], Settings>("get_settings");
 export const setSetting = callable<[key: keyof Settings, value: unknown], Settings>("set_setting");
 export const getEnvironment = callable<[], Environment>("get_environment");
 export const getDisplays = callable<[], DisplayInfo | null>("get_displays");
+export const getMoonlightSettings = callable<[], MoonlightSettings | null>("get_moonlight_settings");
 export const prepareLaunch = callable<[spec: LaunchSpec], Result>("prepare_launch");
 export const switchSession = callable<[], Result>("switch_session");
 export const cancelPending = callable<[], void>("cancel_pending");
