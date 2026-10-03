@@ -12,6 +12,8 @@ returns to Gaming Mode when the app exits.
   --displays   print the display an app would use and its modes, as JSON
   --moonlight-settings
                print Moonlight's current resolution, frame rate and sync settings
+  --diagnostics
+               print a shareable report (personal details masked)
   --uninstall  undo tweaks and remove the systemd unit
 
 Every tweak lives in ~/.config or /run and is recorded in undo.json, so
@@ -23,6 +25,7 @@ Standard library only: this runs on the system Python, not Decky's.
 import glob
 import json
 import os
+import platform
 import re
 import select
 import shlex
@@ -2029,6 +2032,86 @@ def launch():
     return 0
 
 
+# --- diagnostics -------------------------------------------------------------
+
+DIAGNOSTICS_LOG_LINES = 300
+MAC_ADDRESS = re.compile(r"\b[0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5}\b")
+IPV4_ADDRESS = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+
+
+def redact(text, wifi_names=()):
+    """Mask what could identify a person or place before a report is shared:
+    MAC addresses (an access point's BSSID can locate a home), IP addresses
+    and Wi-Fi network names."""
+    text = MAC_ADDRESS.sub("xx:xx:xx:xx:xx:xx", text)
+    text = IPV4_ADDRESS.sub("x.x.x.x", text)
+    for name in wifi_names:
+        if name:
+            text = text.replace(name, "<wifi>")
+    return text
+
+
+def os_release():
+    values = {}
+    try:
+        with open("/etc/os-release") as f:
+            for line in f:
+                key, _, value = line.strip().partition("=")
+                values[key] = value.strip('"')
+    except OSError:
+        pass
+    return values
+
+
+def diagnostics():
+    """A shareable report for bug reports: system, display, Moonlight and the
+    recent launcher log, with personal details masked."""
+    release = os_release()
+
+    def steamosctl(command):
+        out = run(["steamosctl", command])
+        if not succeeded(out):
+            return "?"
+        # "Label: value" lines; keep the values.
+        return ", ".join(line.split(":", 1)[-1].strip() for line in out.stdout.strip().splitlines())
+
+    wifi = active_wifi()
+    lines = [
+        f"SteamOS: {release.get('PRETTY_NAME', '?')} (build {release.get('BUILD_ID', '?')})",
+        f"Kernel: {platform.release()}",
+        f"Device: {steamosctl('get-device-model')}",
+        f"Wi-Fi: backend {steamosctl('get-wifi-backend')}, "
+        f"power saving {steamosctl('get-wifi-power-management-state')}, "
+        f"connected over Wi-Fi: {'yes' if wifi else 'no'}",
+        f"CPU scheduler: {get_power_setting('scheduler') or '?'}; governor: {get_power_setting('governor') or '?'}",
+    ]
+    display = display_info()
+    if display:
+        display = {k: v for k, v in display.items() if k != "modes"} | {"mode_count": len(display["modes"])}
+    lines.append(f"Display: {json.dumps(display)}")
+    installed = succeeded(run(["flatpak", "info", MOONLIGHT_FLATPAK]))
+    # Fork builds carry no Flatpak version; Moonlight logs its own at startup.
+    started = run(["journalctl", "--user", "--no-pager", "-o", "cat", "-g", "Current Moonlight version"])
+    versions = re.findall(r'Current Moonlight version: "([^"]+)"', started.stdout) if started else []
+    conf = read_ini_section(moonlight_conf()) or {}
+    lines.append(
+        f"Moonlight: Flatpak {'installed' if installed else 'not installed'}, "
+        f"last run {versions[-1] if versions else 'unknown'}, "
+        f"Nonary's VRR fork: {'yes' if MOONLIGHT_FORK_KEY in conf else 'no'}"
+    )
+    try:
+        with open(LOG) as f:
+            recent = f.readlines()[-DIAGNOSTICS_LOG_LINES:]
+    except OSError:
+        recent = ["(no launcher log)\n"]
+    lines += ["", f"--- last {len(recent)} lines of launcher.log", "".join(recent).rstrip()]
+    names = [wifi[1]] if wifi else []
+    lock = read_json(WIFI_LOCK)
+    if lock:
+        names.append(lock.get("connection"))
+    return redact("\n".join(lines), names)
+
+
 def uninstall():
     """Undo everything and remove the files Quickscope created.
 
@@ -2061,6 +2144,9 @@ def main(argv):
         return 0
     if command == "--displays":
         print(json.dumps(display_info()))
+        return 0
+    if command == "--diagnostics":
+        print(diagnostics())
         return 0
     if command == "--moonlight-settings":
         current = read_ini_section(moonlight_conf()) or {}

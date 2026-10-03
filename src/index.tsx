@@ -22,6 +22,7 @@ import {
   getDisplays,
   getEnvironment,
   getSettings,
+  saveDiagnostics,
   setSetting,
 } from "./backend";
 import { patchGamePage } from "./gamepage";
@@ -393,6 +394,24 @@ function Content() {
           </PanelSectionRow>
         </PanelSection>
       )}
+
+      <PanelSection title="Help">
+        <PanelSectionRow>
+          <ButtonItem
+            layout="below"
+            description="Saves a report for bug reports to Downloads. Network names and addresses are masked."
+            onClick={async () => {
+              try {
+                toast(`Saved ${await saveDiagnostics()}`);
+              } catch (e) {
+                toast(`Couldn't save diagnostics: ${e}`);
+              }
+            }}
+          >
+            Save diagnostics
+          </ButtonItem>
+        </PanelSectionRow>
+      </PanelSection>
     </>
   );
 }

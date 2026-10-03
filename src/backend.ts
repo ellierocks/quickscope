@@ -106,6 +106,7 @@ export const setSetting = callable<[key: keyof Settings, value: unknown], Settin
 export const getEnvironment = callable<[], Environment>("get_environment");
 export const getDisplays = callable<[], DisplayInfo | null>("get_displays");
 export const getMoonlightSettings = callable<[], MoonlightSettings | null>("get_moonlight_settings");
+export const saveDiagnostics = callable<[], string>("save_diagnostics");
 export const prepareLaunch = callable<[spec: LaunchSpec], Result>("prepare_launch");
 export const switchSession = callable<[], Result>("switch_session");
 export const cancelPending = callable<[], void>("cancel_pending");

@@ -366,6 +366,24 @@ class Plugin:
         except (ValueError, IndexError):
             return None
 
+    async def save_diagnostics(self):
+        """Write a shareable report to ~/Downloads for bug reports. Returns its path."""
+        code, report = await _run_launcher("--diagnostics")
+        if code != 0:
+            report = f"(launcher --diagnostics failed: {report})"
+        settings = json.dumps(self.settings, indent=2, sort_keys=True)
+        text = (
+            f"Quickscope {decky.DECKY_PLUGIN_VERSION}\n"
+            f"Decky Loader {getattr(decky, 'DECKY_VERSION', '?')}\n"
+            f"{report}\n\n--- settings\n{settings}\n"
+        )
+        downloads = os.path.join(decky.DECKY_USER_HOME, "Downloads")
+        os.makedirs(downloads, exist_ok=True)
+        path = os.path.join(downloads, "quickscope-diagnostics.txt")
+        with open(path, "w") as f:
+            f.write(text)
+        return path
+
     async def get_environment(self):
         return {
             "launcher_found": _launcher_source() is not None,

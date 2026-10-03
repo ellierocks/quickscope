@@ -775,6 +775,26 @@ class LogTrim(LauncherTestCase):
             self.assertEqual(f.read(), "a\nb\n")
 
 
+class Diagnostics(LauncherTestCase):
+    def test_redacts_addresses_and_wifi_names(self):
+        text = (
+            "locked My Home Net to access point BC:51:5F:57:11:68\n"
+            '"star" is now online at "192.168.1.73:47989"\nmac bc-51-5f-57-11-6c'
+        )
+        out = self.l.redact(text, ["My Home Net"])
+        self.assertNotIn("BC:51", out)
+        self.assertNotIn("bc-51", out)
+        self.assertNotIn("192.168", out)
+        self.assertNotIn("My Home Net", out)
+        self.assertIn("locked <wifi> to access point xx:xx:xx:xx:xx:xx", out)
+
+    def test_report_runs_without_a_deck(self):
+        self.l.write_file(self.l.LOG, "2026-10-03 12:00:00 [1] locked Net to access point AA:BB:CC:DD:EE:FF\n")
+        report = self.l.diagnostics()
+        self.assertIn("launcher.log", report)
+        self.assertNotIn("AA:BB", report)
+
+
 class Uninstall(LauncherTestCase):
     def test_removes_unit_and_generated_files_but_keeps_the_log(self):
         # Decky runs uninstall on updates too: the log must survive them.
