@@ -19,7 +19,8 @@ jobs:
         with:
           python-version: "3.13"
       # For Ruff, which `pnpm lint` runs through uvx.
-      - uses: astral-sh/setup-uv@v10
+      # setup-uv only publishes exact version tags.
+      - uses: astral-sh/setup-uv@v10.2.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
