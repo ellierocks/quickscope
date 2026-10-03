@@ -1,7 +1,7 @@
 {
   "name": "quickscope",
   "version": "0.2.0",
-  "description": "Decky Loader plugin: launch games and Moonlight outside Gamescope for lower latency",
+  "description": "Decky Loader plugin: launch Moonlight and other streaming clients outside Gamescope",
   "type": "module",
   "scripts": {
     "build": "rollup -c",
