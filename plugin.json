@@ -5,7 +5,7 @@
   "api_version": 1,
   "publish": {
     "tags": ["moonlight", "streaming", "desktop"],
-    "description": "Launch Moonlight or any game outside Gamescope in a stripped-down desktop session, and return to Gaming Mode when it exits.",
+    "description": "Launch Moonlight and other streaming clients outside Gamescope in a stripped-down desktop session, and return to Gaming Mode when it exits.",
     "image": ""
   }
 }

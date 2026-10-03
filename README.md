@@ -2,7 +2,7 @@
 
 # Quickscope
 
-**Launch Moonlight, or any game, outside Gamescope, straight from Gaming Mode.**
+**Launch Moonlight and other streaming clients outside Gamescope, straight from Gaming Mode.**
 
 A [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin for the Steam Deck
 
@@ -50,8 +50,11 @@ Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quicksc
 | Launch method | What happens | Controller |
 |---|---|---|
 | **Hybrid** *(default)* | The app starts right away, and Steam starts in the background | Steam's **desktop layout**, from about 2 s in |
-| **Direct** | The app starts right away, without Steam | Raw Deck controller, no Steam Input |
-| *Steam games* | Launched through Steam, behind the loading screen | The game's usual layout |
+| **Direct** | The app starts right away, without Steam. Good for apps that don't need trackpad mouse or Steam Input | Raw Deck controller, no Steam Input |
+| *Steam games* | Launched through desktop Steam, which takes about 13 s to start | The game's usual layout |
+
+> [!NOTE]
+> Quickscope is built for **streaming clients** like Moonlight, where Gamescope's added latency is measurable (see below). Steam games work, but desktop Steam has to start first and local games have little to gain, so Gaming Mode is usually the better choice for them.
 
 > [!TIP]
 > With **Hybrid**, set up your desktop layout (*Steam → Settings → Controller → Desktop Layout*) the way you want it inside your apps. For Moonlight, a gamepad layout with trackpad mouse and paddle clicks works well.
