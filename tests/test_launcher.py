@@ -140,6 +140,21 @@ class SessionScript(LauncherTestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
+class LogTrim(LauncherTestCase):
+    def test_keeps_only_recent_lines(self):
+        self.l.write_file(self.l.LOG, "".join(f"line {i}\n" for i in range(1000)))
+        self.l.trim_log(keep=10)
+        with open(self.l.LOG) as f:
+            lines = f.read().splitlines()
+        self.assertEqual(lines, [f"line {i}" for i in range(990, 1000)])
+
+    def test_short_log_untouched(self):
+        self.l.write_file(self.l.LOG, "a\nb\n")
+        self.l.trim_log(keep=10)
+        with open(self.l.LOG) as f:
+            self.assertEqual(f.read(), "a\nb\n")
+
+
 class Uninstall(LauncherTestCase):
     def test_removes_unit_and_state(self):
         self.l.install_unit()

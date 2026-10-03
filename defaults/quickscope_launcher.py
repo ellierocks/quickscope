@@ -60,6 +60,8 @@ QUIET_MASKED_UNITS = ["kde-baloo.service"]
 
 PENDING_MAX_AGE = 300
 KWIN_TIMEOUT = 20
+# Roughly the last 10-15 launches.
+LOG_KEEP_LINES = 400
 # Steam may need to start, sign in or update before the game appears.
 STEAM_APPEAR_TIMEOUT = 300
 POLL_INTERVAL = 2
@@ -176,6 +178,18 @@ def log(msg):
         os.makedirs(STATE, exist_ok=True)
         with open(LOG, "a") as f:
             f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [{os.getpid()}] {msg}\n")
+    except OSError:
+        pass
+
+
+def trim_log(keep=LOG_KEEP_LINES):
+    """Keep only the most recent lines of the log (it's appended on every launch)."""
+    try:
+        with open(LOG) as f:
+            lines = f.readlines()
+        if len(lines) > keep:
+            with open(LOG, "w") as f:
+                f.writelines(lines[-keep:])
     except OSError:
         pass
 
@@ -430,6 +444,7 @@ def restore_splash(undo):
 
 
 def prepare():
+    trim_log()
     restore(reload=False)
     pending = read_json(PENDING)
     if pending is None:
@@ -684,7 +699,6 @@ def launch():
     # everything else starts. The KWin script closes it the moment the app's
     # own window appears.
     loading = show_loading_screen(pending.get("name") or "game") if pending.get("loading_screen", True) else None
-    time.sleep(max(0, pending.get("launch_delay", 0)))
 
     script = bool((pending.get("force_fullscreen") or loading)
                   and load_session_script(pending.get("force_fullscreen"), loading))

@@ -19,8 +19,9 @@ SETTINGS_DEFAULTS = {
     "minimal_desktop": True,
     # Show a fullscreen loading screen until the app's window appears.
     "loading_screen": True,
-    # Extra seconds to wait after KWin is ready before launching.
-    "launch_delay": 0,
+    # Pin GPU clocks high and use the performance CPU governor for the
+    # session. Costs battery on long sessions.
+    "performance": True,
     "favorites": [],
     # Per-shortcut launch method: {"<appid>": "direct"}. Shortcuts default to
     # "hybrid": launched directly with desktop Steam started alongside, so
@@ -248,9 +249,7 @@ class Plugin:
     async def set_setting(self, key, value):
         if key not in SETTINGS_DEFAULTS:
             raise ValueError(f"Unknown setting: {key}")
-        if key == "launch_delay":
-            value = max(0, min(15, int(value)))
-        elif key == "favorites":
+        if key == "favorites":
             value = [int(v) for v in value]
         elif key == "launch_modes":
             value = {str(int(k)): v for k, v in value.items() if v in LAUNCH_MODES}
@@ -306,8 +305,7 @@ class Plugin:
                 "loading_screen": s["loading_screen"],
                 # Opinionated session tuning; Quickscope owns this session.
                 "quiet_session": True,
-                "performance": True,
-                "launch_delay": s["launch_delay"],
+                "performance": s["performance"],
             }
 
             path = _paths()["pending"]

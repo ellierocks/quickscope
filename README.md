@@ -71,7 +71,7 @@ Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quicksc
 | Loading screen | On |
 | Skip splash screen | On |
 | Minimal desktop (no Plasma panel) | On |
-| Extra launch delay | 0 s |
+| Performance mode (GPU/CPU at full speed; uses more battery) | On |
 
 ## Troubleshooting
 
@@ -95,7 +95,7 @@ Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quicksc
 | KDE helpers skipped (Baloo, Discover notifier, KDE Connect, print applet) | `Hidden=true` overrides, `systemctl --user mask --runtime kde-baloo.service` |
 | No splash screen | `Engine=none` in `~/.config/ksplashrc` (KDE's own switch), restored afterwards |
 | No Plasma panel | `systemctl --user mask --runtime plasma-plasmashell.service` |
-| Performance mode | `steamosctl set-gpu-performance-level high` (re-applied while running) and `set-cpu-scaling-governor performance` |
+| Performance mode *(setting)* | `steamosctl set-gpu-performance-level high` (re-applied while running) and `set-cpu-scaling-governor performance` |
 
 Everything lives in `~/.config` or `/run`, never in files a SteamOS update replaces. If Quickscope had to create `ksplashrc`, it deletes it again afterwards.
 

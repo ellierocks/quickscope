@@ -3,7 +3,6 @@ import {
   DialogButton,
   PanelSection,
   PanelSectionRow,
-  SliderField,
   TextField,
   ToggleField,
   staticClasses,
@@ -227,15 +226,11 @@ function Content() {
           />
         </PanelSectionRow>
         <PanelSectionRow>
-          <SliderField
-            label="Extra launch delay"
-            description="Seconds to wait after KWin is ready. Leave at 0 unless something pops over your app."
-            value={settings.launch_delay}
-            min={0}
-            max={15}
-            step={1}
-            showValue
-            onChange={(v) => update("launch_delay", v)}
+          <ToggleField
+            label="Performance mode"
+            description="Keep GPU and CPU at full speed while the app runs. Uses more battery."
+            checked={settings.performance}
+            onChange={(v) => update("performance", v)}
           />
         </PanelSectionRow>
       </PanelSection>

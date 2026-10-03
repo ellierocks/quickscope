@@ -6,7 +6,7 @@ export interface Settings {
   skip_splash: boolean;
   minimal_desktop: boolean;
   loading_screen: boolean;
-  launch_delay: number;
+  performance: boolean;
   favorites: number[];
   launch_modes: Record<string, ShortcutMode>;
 }

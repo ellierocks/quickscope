@@ -90,6 +90,11 @@ class PrepareLaunch(unittest.TestCase):
         asyncio.run(self.plugin.set_setting("launch_modes", {"1": "direct", "2": "steam", "3": "bogus"}))
         self.assertEqual(self.plugin.settings["launch_modes"], {"1": "direct"})
 
+    def test_performance_setting_reaches_the_launch(self):
+        self.assertTrue(self.stage(SHORTCUT)[1]["performance"])
+        asyncio.run(self.plugin.set_setting("performance", False))
+        self.assertFalse(self.stage(SHORTCUT)[1]["performance"])
+
     def test_settings_migration(self):
         with open(self.plugin._settings_path(), "w") as f:
             json.dump({"direct_nonsteam": False, "skip_desktop_steam": True,
