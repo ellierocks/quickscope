@@ -12,7 +12,14 @@ Quickscope hands the screen to a single app in a stripped-down Plasma Wayland se
 
 ## Why
 
-In testing on a Steam Deck LCD, streaming Arkham Knight with Moonlight over **HEVC**, Gaming Mode showed latency spikes of up to **8 ms** that didn't occur under Quickscope. With the **PyroWave** codec the difference was small, because its very fast decode masks most of Gamescope's overhead. Your results will depend on your codec, network and host.
+Moonlight's own statistics, streaming *Batman: Arkham Knight* to a Steam Deck LCD with identical Moonlight settings (V-Sync on):
+
+| Codec | Gaming Mode (Gamescope) | Quickscope | Difference |
+|---|---:|---:|---:|
+| HEVC | 7.03 ms | **1.33 ms** | −5.7 ms (−81%) |
+| PyroWave | 0.93 ms | **0.51 ms** | −0.4 ms (−45%) |
+
+*Average rendering time, including display sync: the stage the compositor affects. Decode time was the same in both.* Small samples from one session; full data, method and caveats in [docs/latency.md](docs/latency.md).
 
 ## Features
 
