@@ -56,36 +56,44 @@ export async function launch(app: LibraryApp) {
     );
     if (!ok) return;
   }
-  const spec: LaunchSpec = { appid: app.appid, name: app.name, kind: app.kind };
-  if (app.kind === "shortcut") {
-    const details = await getShortcutDetails(app.appid);
-    if (details) {
-      spec.exe = details.exe;
-      spec.start_dir = details.startDir;
-      spec.launch_options = details.launchOptions;
-    }
-  }
 
-  const staged = await prepareLaunch(spec);
-  if (!staged.ok) {
-    toast(`Couldn't stage launch: ${staged.error}`);
-    return;
-  }
-  if (app.kind === "shortcut" && staged.mode === "steam") {
-    toast(`${app.name}: launching through Steam, couldn't read the shortcut`);
-  }
-
+  // Straight to the launching page; staging (about 2 s) happens behind it.
   await showLaunchingPage(app.name);
-  const switched = await switchSession();
-  if (!switched.ok) {
-    // Steam's own Switch to Desktop as a last resort; it picks its own session.
-    try {
-      if (steamSwitchToDesktop()) return;
-    } catch (e) {
-      console.error("Quickscope: SwitchToDesktop failed", e);
+  try {
+    const spec: LaunchSpec = { appid: app.appid, name: app.name, kind: app.kind };
+    if (app.kind === "shortcut") {
+      const details = await getShortcutDetails(app.appid);
+      if (details) {
+        spec.exe = details.exe;
+        spec.start_dir = details.startDir;
+        spec.launch_options = details.launchOptions;
+      }
     }
+
+    const staged = await prepareLaunch(spec);
+    if (!staged.ok) {
+      hideLaunchingPage();
+      toast(`Couldn't stage launch: ${staged.error}`);
+      return;
+    }
+    if (app.kind === "shortcut" && staged.mode === "steam") {
+      toast(`${app.name}: launching through Steam, couldn't read the shortcut`);
+    }
+
+    const switched = await switchSession();
+    if (!switched.ok) {
+      // Steam's own Switch to Desktop as a last resort; it picks its own session.
+      try {
+        if (steamSwitchToDesktop()) return;
+      } catch (e) {
+        console.error("Quickscope: SwitchToDesktop failed", e);
+      }
+      hideLaunchingPage();
+      await cancelPending();
+      toast(`Couldn't switch to desktop: ${switched.error}`);
+    }
+  } catch (e) {
     hideLaunchingPage();
-    await cancelPending();
-    toast(`Couldn't switch to desktop: ${switched.error}`);
+    throw e;
   }
 }
