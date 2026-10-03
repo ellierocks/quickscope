@@ -112,7 +112,7 @@ There's no Quick Access menu outside Gaming Mode, so Quickscope adds its own con
 | Brightness | Writes the backlight (`/sys/class/backlight/*/brightness`) and re-applies it if KDE changes it (for the whole session with the lock, otherwise while the desktop starts); the original level is restored afterwards |
 | Display | Gaming Mode's mode is read with `modetest` before switching, then set with `kscreen-doctor` (external displays: the Deck's screen off, as in Gaming Mode). Only what differs is changed, since every change makes a TV re-sync. KDE's new-display dialog (`plasma-kscreen-osd.service`) is masked for the session, and `~/.config/kwinoutputconfig.json` is restored afterwards |
 | Brightness shortcut | Reads the built-in controller's hidraw reports without grabbing them, so Steam and the app still get every input |
-| Power profile *(setting)* | High performance: GPU level `high`, `performance` governor. Battery saver: GPU `auto`, `powersave` governor, CPU boost off. Automatic picks one from `/sys/class/power_supply` and switches if you plug in or unplug. Set with `steamosctl`, re-applied while running, restored afterwards |
+| Power profile *(setting)* | High performance: GPU level `high`, `performance` governor. Battery saver: GPU `auto`, `powersave` governor, CPU boost off. Both use the kernel's own CPU scheduler instead of `scx_lavd` (same latency, about 1 W less while streaming). Automatic picks one from `/sys/class/power_supply` and switches if you plug in or unplug. Set with `steamosctl`, re-applied while running, restored afterwards |
 
 Everything lives in `~/.config` or `/run`, never in files a SteamOS update replaces. If Quickscope had to create `ksplashrc`, it deletes it again afterwards.
 

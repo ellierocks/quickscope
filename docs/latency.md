@@ -47,6 +47,15 @@ Measured later the same day, PyroWave at the same Moonlight settings. "Chip powe
 
 With the same stream running, switching profiles live gave 8.5 W (High performance), 7.8 W (SteamOS defaults), 4.8 W (Battery saver) and 5.2 W (Battery saver plus a 6 W TDP limit). Nearly all of the saving comes from turning off CPU boost: with it on, the CPU idles around 3 GHz although Moonlight barely uses it. The TDP limit added nothing.
 
+**CPU scheduler.** One stream each, same scene, Battery saver, PyroWave:
+
+| Scheduler | Render | Decode | Frame queue | Dropped (pacing) | Host FPS | Chip power | CPU busy |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `scx_lavd` | 0.48 ms | 0.65 ms | 2.42 ms | 0.09% | 26 | 4.18 W | 10.0% |
+| kernel default (`none`) | 0.54 ms | 0.66 ms | 2.06 ms | 0.04% | 23 | 3.14 W | 6.1% |
+
+Latency is the same within noise; the kernel's scheduler used about 1 W less. The host sent about 12% fewer frames in the second run, which explains only part of that. Quickscope uses the kernel's scheduler for the session and restores the user's afterwards.
+
 The battery saver's power reading was taken early in the stream, before the gameplay section. Render time didn't change and decode time rose by about 0.08 ms, which is negligible.
 
 ## Every stream

@@ -275,7 +275,7 @@ class Power(LauncherTestCase):
     def setUp(self):
         super().setUp()
         # A fake steamosctl holding SteamOS's defaults.
-        self.state = {"gpu": "auto", "governor": "powersave", "boost": "enabled"}
+        self.state = {"gpu": "auto", "governor": "powersave", "boost": "enabled", "scheduler": "lavd"}
         commands = {cmd: (key, i) for key, cmds in self.l.POWER_SETTINGS.items() for i, cmd in enumerate(cmds)}
 
         def fake_run(cmd):
@@ -296,20 +296,25 @@ class Power(LauncherTestCase):
         self.l.write_file(os.path.join(root, "class/drm/card0/device/power_dpm_force_performance_level"), "high\n")
         self.l.write_file(os.path.join(root, "devices/system/cpu/cpu0/cpufreq/scaling_governor"), "powersave\n")
         self.l.write_file(os.path.join(root, "devices/system/cpu/cpufreq/boost"), "0\n")
-        self.assertEqual(
-            [self.l.get_power_setting(k) for k in ("gpu", "governor", "boost")], ["high", "powersave", "disabled"]
-        )
+        self.l.write_file(os.path.join(root, "kernel/sched_ext/state"), "enabled\n")
+        self.l.write_file(os.path.join(root, "kernel/sched_ext/root/ops"), "lavd_1.1.3_x86_64_unknown_linux_gnu\n")
+        keys = ("gpu", "governor", "boost", "scheduler")
+        self.assertEqual([self.l.get_power_setting(k) for k in keys], ["high", "powersave", "disabled", "lavd"])
+        self.l.write_file(os.path.join(root, "kernel/sched_ext/state"), "disabled\n")
+        self.assertEqual(self.l.get_power_setting("scheduler"), "none")
 
     def test_battery_profile_applies_and_restores(self):
         applied = self.l.apply_power_profile("battery")
-        self.assertEqual(applied, {"gpu": "auto", "governor": "powersave", "boost": "disabled"})
+        self.assertEqual(applied, {"gpu": "auto", "governor": "powersave", "boost": "disabled", "scheduler": "none"})
         self.assertEqual(self.state["boost"], "disabled")
         self.l.restore(reload=False)
-        self.assertEqual(self.state, {"gpu": "auto", "governor": "powersave", "boost": "enabled"})
+        self.assertEqual(self.state, {"gpu": "auto", "governor": "powersave", "boost": "enabled", "scheduler": "lavd"})
 
     def test_performance_profile(self):
         self.l.apply_power_profile("performance")
-        self.assertEqual(self.state, {"gpu": "high", "governor": "performance", "boost": "enabled"})
+        self.assertEqual(
+            self.state, {"gpu": "high", "governor": "performance", "boost": "enabled", "scheduler": "none"}
+        )
 
     def test_unknown_profile_does_nothing(self):
         self.assertEqual(self.l.apply_power_profile("turbo"), {})

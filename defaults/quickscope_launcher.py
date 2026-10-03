@@ -66,13 +66,16 @@ POWER_SETTINGS = {
     "gpu": ("get-gpu-performance-level", "set-gpu-performance-level"),
     "governor": ("get-cpu-scaling-governor", "set-cpu-scaling-governor"),
     "boost": ("get-cpu-boost-state", "set-cpu-boost-state"),
+    "scheduler": ("get-cpu-scheduler", "set-cpu-scheduler"),
 }
 # Measured streaming over Moonlight (APU power): SteamOS defaults 7.8 W,
 # performance 8.5 W, battery saver 4.8 W. CPU boost is most of the difference;
 # a TDP limit saved nothing more, the stream already draws under 6 W.
+# Both use the kernel's own scheduler: against scx_lavd it streamed with the
+# same latency on about 1 W less (3.1 vs 4.2 W) and 40% less CPU.
 POWER_PROFILES = {
-    "performance": {"gpu": "high", "governor": "performance", "boost": "enabled"},
-    "battery": {"gpu": "auto", "governor": "powersave", "boost": "disabled"},
+    "performance": {"gpu": "high", "governor": "performance", "boost": "enabled", "scheduler": "none"},
+    "battery": {"gpu": "auto", "governor": "powersave", "boost": "disabled", "scheduler": "none"},
 }
 # "auto" picks one of these by power source, and follows it while running.
 AUTO_PROFILES = {"plugged_in": "performance", "on_battery": "battery"}
@@ -778,6 +781,13 @@ def read_power_sysfs(key):
     if key == "boost":
         value = read_text(os.path.join(SYSFS_ROOT, "devices/system/cpu/cpufreq/boost"))
         return {"1": "enabled", "0": "disabled"}.get(value)
+    if key == "scheduler":
+        # sched_ext: "disabled", or "enabled" with ops like "lavd_1.1.3_x86_64_…".
+        state = read_text(os.path.join(SYSFS_ROOT, "kernel/sched_ext/state"))
+        if state == "disabled":
+            return "none"
+        ops = read_text(os.path.join(SYSFS_ROOT, "kernel/sched_ext/root/ops"))
+        return ops.split("_", 1)[0] if state == "enabled" and ops else None
     return None
 
 
