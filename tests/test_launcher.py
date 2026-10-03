@@ -756,6 +756,12 @@ class Volume(LauncherTestCase):
         self.assertEqual(self.l.parse_volume(out, "Mute: yes\n"), (50, True))
         self.assertIsNone(self.l.parse_volume("", "Mute: no"))
 
+    def test_loading_qml_is_filled_in(self):
+        qml = self.l.LOADING_QML % {"title": '"t"', "message": '"Starting…"', "status_url": '"file:///x"'}
+        self.assertNotIn("%(", qml)
+        # Self-drawn spinner: nothing from the desktop theme.
+        self.assertNotIn("QtQuick.Controls", qml)
+
     def test_osd_qml_is_filled_in(self):
         qml = self.l.OSD_QML % {"title": '"t"', "state_url": '"file:///x"'}
         self.assertIn("text: osd.valueText", qml)

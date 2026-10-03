@@ -6,6 +6,8 @@
 
 A [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin for the Steam Deck
 
+<img src="docs/images/loading-stream.png" alt="Quickscope's loading screen: Starting Steam Big Picture…" width="49%"> <img src="docs/images/loading-returning.png" alt="Quickscope's loading screen: Returning to Gaming Mode…" width="49%">
+
 </div>
 
 Quickscope hands the screen to a single app in a stripped-down Plasma Wayland session (KWin, no panel, nothing in the background) and returns you to Gaming Mode when the app exits. From pressing **A** to Moonlight on screen takes about **6 seconds**.

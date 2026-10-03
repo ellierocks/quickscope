@@ -3,7 +3,7 @@
 // last frame until it exits, so this page bridges into the desktop session's
 // own loading screen instead of leaving a black screen.
 import { routerHook } from "@decky/api";
-import { Navigation, Spinner } from "@decky/ui";
+import { Navigation } from "@decky/ui";
 
 export const LAUNCHING_ROUTE = "/quickscope/launching";
 
@@ -24,7 +24,19 @@ function LaunchingPage() {
         gap: "24px",
       }}
     >
-      <Spinner style={{ width: 48, height: 48 }} />
+      {/* The same ring as the desktop session's loading screen, so the two read as one. */}
+      <style>{"@keyframes quickscope-spin { to { transform: rotate(360deg); } }"}</style>
+      <div
+        style={{
+          width: 40,
+          height: 40,
+          borderRadius: "50%",
+          border: "4px solid #2a2f38",
+          borderTopColor: "#1a9fff",
+          borderRightColor: "#1a9fff",
+          animation: "quickscope-spin 0.9s linear infinite",
+        }}
+      />
       <div style={{ color: "#d0d0d0", fontSize: "26px" }}>Starting {appName}…</div>
     </div>
   );

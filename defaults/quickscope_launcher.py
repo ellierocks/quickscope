@@ -282,7 +282,6 @@ if (minimizeSteamWindows) {
 LOADING_TITLE = "Quickscope Loading"
 LOADING_QML = """\
 import QtQuick
-import QtQuick.Controls
 import QtQuick.Window
 
 Window {
@@ -294,9 +293,37 @@ Window {
     Column {
         anchors.centerIn: parent
         spacing: 24
-        BusyIndicator {
-            running: true
+        // Drawn here rather than a themed BusyIndicator: the same on every
+        // Deck whatever the desktop theme, and no Controls import to load.
+        Item {
+            width: 48
+            height: 48
             anchors.horizontalCenter: parent.horizontalCenter
+            Canvas {
+                anchors.fill: parent
+                onPaint: {
+                    var ctx = getContext("2d");
+                    var c = width / 2, r = c - 3;
+                    ctx.reset();
+                    ctx.lineWidth = 4;
+                    ctx.lineCap = "round";
+                    ctx.strokeStyle = "#2a2f38";
+                    ctx.beginPath();
+                    ctx.arc(c, c, r, 0, 2 * Math.PI);
+                    ctx.stroke();
+                    ctx.strokeStyle = "#1a9fff";
+                    ctx.beginPath();
+                    ctx.arc(c, c, r, -Math.PI / 2, Math.PI / 4);
+                    ctx.stroke();
+                }
+            }
+            RotationAnimator on rotation {
+                from: 0
+                to: 360
+                duration: 900
+                loops: Animation.Infinite
+                running: true
+            }
         }
         Text {
             id: message
