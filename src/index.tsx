@@ -278,14 +278,17 @@ function Content() {
             onChange={(v) => update("wifi_powersave_off", v)}
           />
         </PanelSectionRow>
-        <PanelSectionRow>
-          <ToggleField
-            label="Lock Wi-Fi access point"
-            description="Stay on the access point you're connected to, with no background scans or roaming that can stutter a stream. Applies with the WPA Supplicant Wi-Fi backend (Developer settings); SteamOS's default backend only roams on a weak signal."
-            checked={settings.wifi_lock_ap}
-            onChange={(v) => update("wifi_lock_ap", v)}
-          />
-        </PanelSectionRow>
+        {/* Only wpa_supplicant scans and roams in the background. */}
+        {env?.wifi_backend === "wpa_supplicant" && (
+          <PanelSectionRow>
+            <ToggleField
+              label="Lock Wi-Fi access point"
+              description="No roaming or background scans during a stream."
+              checked={settings.wifi_lock_ap}
+              onChange={(v) => update("wifi_lock_ap", v)}
+            />
+          </PanelSectionRow>
+        )}
       </PanelSection>
 
       {display && (

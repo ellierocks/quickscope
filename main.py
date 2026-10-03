@@ -112,6 +112,27 @@ def _which(cmd):
     return shutil.which(cmd, path=_system_env()["PATH"])
 
 
+async def _wifi_backend():
+    """ "iwd" (SteamOS's default), "wpa_supplicant" (forced in Developer settings), or None."""
+    steamosctl = _which("steamosctl")
+    if not steamosctl:
+        return None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            steamosctl,
+            "get-wifi-backend",
+            env=_system_env(),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
+    except (OSError, TimeoutError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return out.decode(errors="replace").rsplit(":", 1)[-1].strip() or None
+
+
 def _launcher_source():
     # The decky CLI copies defaults/* into the plugin root; during development
     # the file is still under defaults/.
@@ -347,6 +368,7 @@ class Plugin:
         return {
             "launcher_found": _launcher_source() is not None,
             "pending": os.path.exists(_paths()["pending"]),
+            "wifi_backend": await _wifi_backend(),
         }
 
     async def prepare_launch(self, spec):

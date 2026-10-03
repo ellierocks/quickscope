@@ -76,7 +76,7 @@ Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quicksc
 | Force fullscreen | On |
 | Power profile: Automatic (Battery saver on battery, High performance when plugged in), High performance, or Battery saver (about 40% less chip power while streaming) | Automatic |
 | Disable Wi-Fi power saving (it adds latency spikes on many Wi-Fi chips) | On |
-| Lock Wi-Fi access point (no roaming or background scans; with the WPA Supplicant backend) | On |
+| Lock Wi-Fi access point (no roaming or background scans; shown only with the WPA Supplicant backend) | On |
 | Starting brightness | Matches Gaming Mode; or a fixed level |
 | Lock brightness (stops KDE's power management changing it) | On |
 | Display mode and HDR (on an external display, or a built-in panel with several modes or HDR): match Gaming Mode, or pick one of the display's own modes | Match Gaming Mode |

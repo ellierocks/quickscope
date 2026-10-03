@@ -32,6 +32,8 @@ export type ShortcutMode = "hybrid" | "direct";
 export interface Environment {
   launcher_found: boolean;
   pending: boolean;
+  /** "iwd" (SteamOS's default) or "wpa_supplicant" (forced in Developer settings). */
+  wifi_backend: string | null;
 }
 
 export interface DisplayInfo {
