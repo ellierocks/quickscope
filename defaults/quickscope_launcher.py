@@ -87,10 +87,12 @@ BRIGHTNESS_MIN_PCT = 5
 # power management can't override it as the desktop starts.
 BRIGHTNESS_SETTLE_TIME = 15
 
-# Brightness shortcut: Steam + left stick up/down, read from the built-in
-# controller's hidraw state reports (Steam button = byte 9 bit 5, left stick
-# Y = bytes 50-51 as little-endian int16, up positive).
+# Brightness shortcut: "…" (Quick Access) + left stick up/down, read from the
+# built-in controller's hidraw state reports (left stick Y = bytes 50-51 as
+# little-endian int16, up positive). "…" does nothing outside Gaming Mode;
+# the Steam button would open desktop Steam's window.
 DECK_HID_ID = "000028DE:00001205"
+COMBO_BUTTON = (14, 0x04)  # byte, bit mask: the "…" button
 COMBO_STICK_THRESHOLD = 20000
 COMBO_REPEAT_DELAY = 0.35
 COMBO_REPEAT_INTERVAL = 0.12
@@ -165,7 +167,11 @@ var ignored = ["steam", "steamwebhelper", "plasmashell", "org.kde.plasmashell",
                "org.kde.kwalletd6", "kwalletd6", "org.kde.drkonqi"];
 var forceFullscreen = %FORCE_FULLSCREEN%;
 var loadingPid = %LOADING_PID%;
+// Hybrid: desktop Steam runs only for the controller. The Steam button opens
+// its window behind the app, where rendering the store costs 40 percent of a core.
+var minimizeSteamWindows = %MINIMIZE_STEAM_WINDOWS%;
 var windowAdded = workspace.windowAdded || workspace.clientAdded;
+var appWindow = null;
 function isLoadingScreen(w) {
     return w.pid === loadingPid || String(w.caption) === "%LOADING_TITLE%";
 }
@@ -182,6 +188,7 @@ function onWindowAdded(w) {
     if (!w || !w.normalWindow || isOwnOverlay(w)) return;
     if (ignored.indexOf(String(w.resourceClass).toLowerCase()) !== -1) return;
     windowAdded.disconnect(onWindowAdded);
+    appWindow = w;
     if (forceFullscreen) w.fullScreen = true;
     if ("activeWindow" in workspace) workspace.activeWindow = w;
     else workspace.activeClient = w;
@@ -189,6 +196,39 @@ function onWindowAdded(w) {
     closeLoadingScreen();
 }
 windowAdded.connect(onWindowAdded);
+function isSteamWindow(w) {
+    var cls = String(w && w.resourceClass).toLowerCase();
+    return !!w && w.normalWindow && (cls === "steam" || cls === "steamwebhelper");
+}
+function focusApp() {
+    if (!appWindow) return;
+    if ("activeWindow" in workspace) workspace.activeWindow = appWindow;
+    else workspace.activeClient = appWindow;
+}
+// Minimize, never close: with no tray in this session, closing the main
+// window quits Steam (and Steam Input), and closing its startup/update window
+// cancels the start. Steam re-shows its window on the Steam button, so keep
+// it minimized and hand focus straight back to the app.
+function keepMinimized(w) {
+    if (!isSteamWindow(w)) return;
+    w.minimized = true;
+    w.minimizedChanged.connect(function () {
+        if (!w.minimized) {
+            w.minimized = true;
+            focusApp();
+        }
+    });
+}
+if (minimizeSteamWindows) {
+    windowAdded.connect(keepMinimized);
+    var activated = workspace.windowActivated || workspace.clientActivated;
+    activated.connect(function (w) {
+        if (isSteamWindow(w)) {
+            w.minimized = true;
+            focusApp();
+        }
+    });
+}
 """
 
 LOADING_TITLE = "Quickscope Loading"
@@ -641,8 +681,9 @@ def is_deck_state_report(report):
 
 
 def combo_direction(report):
-    """+1/-1 while Steam is held with the left stick pushed up/down, else 0."""
-    if not report[9] & 0x20:
+    """+1/-1 while "…" is held with the left stick pushed up/down, else 0."""
+    byte, mask = COMBO_BUTTON
+    if not report[byte] & mask:
         return 0
     y = int.from_bytes(report[50:52], "little", signed=True)
     if y >= COMBO_STICK_THRESHOLD:
@@ -653,7 +694,7 @@ def combo_direction(report):
 
 
 class BrightnessCombo(threading.Thread):
-    """Steam + left stick up/down changes the brightness, like hardware keys.
+    """ "…" + left stick up/down changes the brightness, like hardware keys.
     Reads the controller passively, so Steam and the app still see everything."""
 
     def __init__(self, osd, keeper):
@@ -1466,7 +1507,7 @@ def wait_for_kwin():
     return False
 
 
-def load_session_script(force_fullscreen, loading):
+def load_session_script(force_fullscreen, loading, minimize_steam_windows=False):
     """Load the KWin script that fullscreens/activates the app's first window
     and closes the loading screen once that window appears."""
     script = (
@@ -1474,6 +1515,7 @@ def load_session_script(force_fullscreen, loading):
         .replace("%OSD_TITLE%", OSD_TITLE)
         .replace("%LOADING_PID%", str(loading.pid if loading else -1))
         .replace("%FORCE_FULLSCREEN%", "true" if force_fullscreen else "false")
+        .replace("%MINIMIZE_STEAM_WINDOWS%", "true" if minimize_steam_windows else "false")
     )
     write_file(KWIN_SCRIPT, script)
     dbus("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", f"string:{KWIN_SCRIPT_NAME}")
@@ -1693,8 +1735,10 @@ def launch():
         log("loading screen exited early, starting it again")
         loading = show_loading_screen(starting)
 
+    hybrid = pending.get("mode") == "hybrid"
     script = bool(
-        (pending.get("force_fullscreen") or loading) and load_session_script(pending.get("force_fullscreen"), loading)
+        (pending.get("force_fullscreen") or loading or hybrid)
+        and load_session_script(pending.get("force_fullscreen"), loading, minimize_steam_windows=hybrid)
     )
     if loading and not script:
         # Without the script nothing can tell when the app's window is up.

@@ -1,6 +1,7 @@
 """Tests for defaults/quickscope_launcher.py, run against a temporary HOME."""
 
 import importlib.util
+import json
 import os
 import pathlib
 import shutil
@@ -145,6 +146,7 @@ class SessionScript(LauncherTestCase):
             .replace("%OSD_TITLE%", self.l.OSD_TITLE)
             .replace("%LOADING_PID%", "1234")
             .replace("%FORCE_FULLSCREEN%", "true")
+            .replace("%MINIMIZE_STEAM_WINDOWS%", "true")
         )
         self.assertNotIn("%", js)
         path = os.path.join(self.home, "session.js")
@@ -152,6 +154,52 @@ class SessionScript(LauncherTestCase):
             f.write(js)
         result = subprocess.run(["node", "--check", path], capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_hybrid_minimizes_steam_windows_but_not_the_app(self):
+        js = (
+            self.l.SESSION_JS.replace("%LOADING_TITLE%", self.l.LOADING_TITLE)
+            .replace("%OSD_TITLE%", self.l.OSD_TITLE)
+            .replace("%LOADING_PID%", "-1")
+            .replace("%FORCE_FULLSCREEN%", "true")
+            .replace("%MINIMIZE_STEAM_WINDOWS%", "true")
+        )
+        # A fake KWin: windows arrive in order, as when Steam's button opens it mid-stream.
+        harness = """
+function signal() {
+  const handlers = [];
+  return { handlers, connect: (f) => handlers.push(f), disconnect: (f) => handlers.splice(handlers.indexOf(f), 1),
+           emit: (...a) => [...handlers].forEach((f) => f(...a)) };
+}
+const workspace = { windowAdded: signal(), windowActivated: signal(), windowList: () => [], activeWindow: null };
+function win(cls) {
+  return { resourceClass: cls, caption: cls, normalWindow: true, pid: 1, closed: false,
+           minimized: false, fullScreen: false, minimizedChanged: signal(),
+           closeWindow() { this.closed = true; } };
+}
+%SCRIPT%
+const steamUpdate = win("steam");
+const app = win("com.moonlight_stream.Moonlight");
+const steamStore = win("steam");
+for (const w of [steamUpdate, app, steamStore]) workspace.windowAdded.emit(w);
+// The Steam button: Steam un-minimizes and activates its window.
+steamStore.minimized = false;
+steamStore.minimizedChanged.emit();
+workspace.activeWindow = steamStore;
+workspace.windowActivated.emit(steamStore);
+const state = (w) => ({ closed: w.closed, minimized: w.minimized, fullScreen: w.fullScreen });
+console.log(JSON.stringify({ windows: [steamUpdate, app, steamStore].map(state),
+                             appActive: workspace.activeWindow === app }));
+""".replace("%SCRIPT%", js)
+        result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = json.loads(result.stdout)
+        steam_update, app, steam_store = out["windows"]
+        # Closing a Steam window quits Steam (no tray) or cancels its start: never.
+        self.assertEqual(steam_update, {"closed": False, "minimized": True, "fullScreen": False})
+        self.assertEqual(steam_store, {"closed": False, "minimized": True, "fullScreen": False})
+        self.assertEqual(app, {"closed": False, "minimized": False, "fullScreen": True})
+        self.assertTrue(out["appActive"])
 
 
 class Brightness(LauncherTestCase):
@@ -576,7 +624,7 @@ class Combo(LauncherTestCase):
         r = bytearray(64)
         r[0:3] = b"\x01\x00\x09"
         if steam:
-            r[9] |= 0x20
+            r[14] |= 0x04
         r[50:52] = y.to_bytes(2, "little", signed=True)
         return bytes(r)
 

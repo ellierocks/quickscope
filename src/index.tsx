@@ -356,7 +356,7 @@ function Content() {
           <PanelSectionRow>
             <ToggleField
               label="Lock brightness"
-              description="Stop the desktop's power management from dimming or changing the screen. To change the brightness while an app runs, hold Steam and push the left stick up or down."
+              description="Stop the desktop's power management from dimming or changing the screen. To change the brightness while an app runs, hold … and push the left stick up or down."
               checked={settings.lock_brightness}
               onChange={(v) => update("lock_brightness", v)}
             />

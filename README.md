@@ -82,7 +82,7 @@ Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quicksc
 
 There's no Quick Access menu outside Gaming Mode, so Quickscope adds its own controls:
 
-- **Brightness:** hold **Steam** and push the **left stick** up or down.
+- **Brightness:** hold **…** and push the **left stick** up or down.
 - **Volume:** the volume buttons work as usual, with an on-screen indicator.
 
 ## Troubleshooting
