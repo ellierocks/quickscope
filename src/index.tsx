@@ -142,6 +142,11 @@ function Content() {
 
   if (!settings) return null;
 
+  // Nothing to switch off if power saving is already off everywhere.
+  const showPowersave = env?.wifi_powersave !== "disabled";
+  // Only wpa_supplicant scans and roams in the background.
+  const showLockAp = env?.wifi_backend === "wpa_supplicant";
+
   const update = async <K extends keyof Settings>(key: K, value: Settings[K]) => {
     setSettings((s) => s && { ...s, [key]: value });
     setSettings(await setSetting(key, value));
@@ -269,27 +274,30 @@ function Content() {
         </PanelSectionRow>
       </PanelSection>
 
-      <PanelSection title="Network">
-        <PanelSectionRow>
-          <ToggleField
-            label="Disable Wi-Fi power saving"
-            description="Power saving makes many Wi-Fi chips add latency spikes to a stream."
-            checked={settings.wifi_powersave_off}
-            onChange={(v) => update("wifi_powersave_off", v)}
-          />
-        </PanelSectionRow>
-        {/* Only wpa_supplicant scans and roams in the background. */}
-        {env?.wifi_backend === "wpa_supplicant" && (
-          <PanelSectionRow>
-            <ToggleField
-              label="Lock Wi-Fi access point"
-              description="No roaming or background scans during a stream."
-              checked={settings.wifi_lock_ap}
-              onChange={(v) => update("wifi_lock_ap", v)}
-            />
-          </PanelSectionRow>
-        )}
-      </PanelSection>
+      {(showPowersave || showLockAp) && (
+        <PanelSection title="Network">
+          {showPowersave && (
+            <PanelSectionRow>
+              <ToggleField
+                label="Disable Wi-Fi power saving"
+                description="Power saving makes many Wi-Fi chips add latency spikes to a stream."
+                checked={settings.wifi_powersave_off}
+                onChange={(v) => update("wifi_powersave_off", v)}
+              />
+            </PanelSectionRow>
+          )}
+          {showLockAp && (
+            <PanelSectionRow>
+              <ToggleField
+                label="Lock Wi-Fi access point"
+                description="No roaming or background scans during a stream."
+                checked={settings.wifi_lock_ap}
+                onChange={(v) => update("wifi_lock_ap", v)}
+              />
+            </PanelSectionRow>
+          )}
+        </PanelSection>
+      )}
 
       {display && (
         <PanelSection title={display.external ? "External display" : "Display"}>

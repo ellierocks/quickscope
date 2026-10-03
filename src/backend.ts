@@ -34,6 +34,8 @@ export interface Environment {
   pending: boolean;
   /** "iwd" (SteamOS's default) or "wpa_supplicant" (forced in Developer settings). */
   wifi_backend: string | null;
+  /** Wi-Fi power management outside sessions: "enabled" or "disabled". */
+  wifi_powersave: string | null;
 }
 
 export interface DisplayInfo {

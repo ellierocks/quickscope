@@ -75,7 +75,7 @@ Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quicksc
 | Return to Gaming Mode on exit | On |
 | Force fullscreen | On |
 | Power profile: Automatic (Battery saver on battery, High performance when plugged in), High performance, or Battery saver (about 40% less chip power while streaming) | Automatic |
-| Disable Wi-Fi power saving (it adds latency spikes on many Wi-Fi chips) | On |
+| Disable Wi-Fi power saving (it adds latency spikes on many Wi-Fi chips; shown only if it's on in SteamOS) | On |
 | Lock Wi-Fi access point (no roaming or background scans; shown only with the WPA Supplicant backend) | On |
 | Starting brightness | Matches Gaming Mode; or a fixed level |
 | Lock brightness (stops KDE's power management changing it) | On |
