@@ -38,36 +38,6 @@ class LauncherTestCase(unittest.TestCase):
         shutil.rmtree(self.sysconf, ignore_errors=True)
 
 
-class AppTuning(LauncherTestCase):
-    ORIGINAL = "[General]\nbitrate=350000\nvsync=true\nwidth=1920\n[hosts]\n1\\vsync=keep\n"
-
-    def setUp(self):
-        super().setUp()
-        self.conf = self.l.APP_CONFIG_OVERRIDES["moonlight"]["paths"][0]
-        os.makedirs(os.path.dirname(self.conf))
-        with open(self.conf, "w") as f:
-            f.write(self.ORIGINAL)
-
-    def read(self):
-        with open(self.conf) as f:
-            return f.read()
-
-    def test_tune_then_restore_is_byte_identical(self):
-        self.l.tune_app_config({"name": "Moonlight", "command": None})
-        tuned = self.read()
-        self.assertIn("vsync=false", tuned)
-        self.assertIn("framepacing=false", tuned)
-        self.assertEqual(tuned.count("[General]"), 1)
-        self.assertLess(tuned.index("framepacing=false"), tuned.index("[hosts]"))
-        self.assertIn("1\\vsync=keep", tuned)  # other sections untouched
-        self.l.restore(reload=False)
-        self.assertEqual(self.read(), self.ORIGINAL)
-
-    def test_other_apps_are_untouched(self):
-        self.l.tune_app_config({"name": "Some Game", "command": "/bin/game"})
-        self.assertEqual(self.read(), self.ORIGINAL)
-
-
 class QuietAutostart(LauncherTestCase):
     def write_entry(self, directory, name, exe):
         os.makedirs(directory, exist_ok=True)

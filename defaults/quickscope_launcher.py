@@ -58,21 +58,6 @@ QUIET_AUTOSTART = {
 }
 QUIET_MASKED_UNITS = ["kde-baloo.service"]
 
-# Session-only overrides for the launched app's own config, restored when it
-# exits. We own the compositor here, so Moonlight should present immediately
-# and let KWin tear (KWin's AllowTearing defaults to true) instead of waiting
-# on vblank.
-APP_CONFIG_OVERRIDES = {
-    "moonlight": {
-        "paths": [
-            os.path.join(HOME, ".var", "app", "com.moonlight_stream.Moonlight", "config",
-                         "Moonlight Game Streaming Project", "Moonlight.conf"),
-            os.path.join(HOME, ".config", "Moonlight Game Streaming Project", "Moonlight.conf"),
-        ],
-        "values": {"vsync": "false", "framepacing": "false"},
-    },
-}
-
 PENDING_MAX_AGE = 300
 KWIN_TIMEOUT = 20
 # Steam may need to start, sign in or update before the game appears.
@@ -252,80 +237,6 @@ def python_exe():
     return "/usr/bin/python3" if os.path.exists("/usr/bin/python3") else sys.executable
 
 
-def get_ini_values(path, keys):
-    """Read top-level ([General]) keys from a QSettings-style ini file."""
-    values, section = {}, "General"
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("["):
-                    section = line[1:-1]
-                elif section == "General" and "=" in line:
-                    key, value = line.split("=", 1)
-                    if key in keys:
-                        values[key] = value
-    except OSError:
-        pass
-    return values
-
-
-def set_ini_values(path, values):
-    """Set [General] keys in place, keeping every other line untouched.
-    A value of None removes the key."""
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            lines = f.read().splitlines()
-    except OSError:
-        return False
-    section, seen, out = "General", set(), []
-
-    def missing():
-        return [f"{k}={v}" for k, v in values.items() if k not in seen and v is not None]
-
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("["):
-            new_section = stripped[1:-1]
-            # Append missing keys when leaving [General] (the implicit
-            # section before any header counts as [General] too).
-            if section == "General" and new_section != "General":
-                out.extend(missing())
-                seen.update(values)
-            section = new_section
-        elif section == "General" and "=" in stripped and stripped.split("=", 1)[0] in values:
-            key = stripped.split("=", 1)[0]
-            seen.add(key)
-            if values[key] is None:
-                continue
-            line = f"{key}={values[key]}"
-        out.append(line)
-    if section == "General":
-        out.extend(missing())
-    write_file(path, "\n".join(out) + "\n")
-    return True
-
-
-def tune_app_config(pending):
-    """Apply session-only config overrides for known latency-sensitive apps."""
-    haystack = f"{pending.get('name', '')} {pending.get('command') or ''}".lower()
-    originals = {}
-    for app, spec in APP_CONFIG_OVERRIDES.items():
-        if app not in haystack:
-            continue
-        for path in spec["paths"]:
-            if not os.path.isfile(path):
-                continue
-            current = get_ini_values(path, spec["values"])
-            if current == spec["values"]:
-                continue
-            if set_ini_values(path, spec["values"]):
-                # Keys that weren't set before are removed again (None).
-                originals[path] = {k: current.get(k) for k in spec["values"]}
-                record_undo("app_config", originals)
-                log(f"tuned {path}: {spec['values']}")
-
-
 class GpuLevelKeeper(threading.Thread):
     """Desktop Steam resets the GPU performance level to auto when it starts
     (it applies its own performance settings), so keep re-pinning it."""
@@ -398,9 +309,6 @@ def restore(reload=True, restart_shell=False):
         run(["steamosctl", "set-cpu-scaling-governor", perf["governor"]])
     if perf:
         log(f"restored performance settings {perf}")
-    for path, values in undo.get("app_config", {}).items():
-        set_ini_values(path, values)
-        log(f"restored {path} {values}")
     remove(ONESHOT_AUTOSTART)
     if reload:
         systemctl("daemon-reload")
@@ -786,8 +694,6 @@ def launch():
         timer.daemon = True
         timer.start()
 
-    if pending.get("app_tuning", True):
-        tune_app_config(pending)
     keeper = boost_performance() if pending.get("performance", True) else None
     suspended = pending.get("suspend_compositor") and session == "x11" and suspend_compositing()
     returning = pending.get("return_to_gaming")

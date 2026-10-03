@@ -2,7 +2,7 @@
 
 A [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin that launches a non-Steam app or Steam game **outside Gamescope**, in a stripped-down desktop session tuned for low latency, then drops you back into Gaming Mode when it exits.
 
-It's built for game streaming with **Moonlight**. Inside Gaming Mode, every frame goes through Gamescope's compositor and frame pacing. Quickscope gives the app the display to itself instead: tearing allowed, the GPU kept at high clocks, and nothing else competing.
+It's built for game streaming with **Moonlight**. Inside Gaming Mode, every frame goes through Gamescope's compositor. Quickscope gives the app the display to itself instead, with the GPU kept at high clocks and nothing else competing.
 
 From pressing **A** in Gaming Mode to Moonlight on screen takes about **6 seconds** on a Steam Deck.
 
@@ -11,7 +11,7 @@ From pressing **A** in Gaming Mode to Moonlight on screen takes about **6 second
 - **One press from Gaming Mode.** Pick an app in the Quick Access panel. Pinned apps sit at the top, and recently played apps and search are below.
 - **Fast:** the app starts as soon as KWin is up, before Plasma's panel, desktop or autostart apps.
 - **Keeps your controller layout:** desktop Steam starts alongside the app and takes over the controller with your Steam **desktop layout** (see [Controls](#controls)).
-- **Tuned session:** tearing, performance mode, no panel, no splash, and no KDE background helpers.
+- **Tuned session:** performance mode, no panel, no splash, and no KDE background helpers. Your apps' own settings are never changed.
 - **Loading screen** until the app's window appears, never a black screen.
 - **Leaves no trace:** every change is session-only, lives in `~/.config` or `/run` (never in files a SteamOS update replaces), and is undone when the app exits.
 
@@ -49,7 +49,7 @@ Quickscope warns you if a game is running, because leaving Gaming Mode closes it
 ### Moonlight
 
 - Add Moonlight (Flatpak) as a non-Steam shortcut and leave it on **Hybrid**.
-- For the session only, Quickscope turns off Moonlight's V-Sync and frame pacing so frames are shown immediately. Your settings are restored when Moonlight exits, so Gaming Mode is unaffected.
+- Moonlight runs with your own settings. Quickscope never touches its config. On the Deck's 60 Hz screen, which has no VRR, keeping V-Sync on avoids tearing.
 - To jump straight into a stream, set the shortcut's launch options to `run com.moonlight_stream.Moonlight stream <host> "<app>"`. Moonlight closes itself when the stream ends, and Quickscope returns you to Gaming Mode.
 - Quit a stream with **L1 + R1 + Start + Select**.
 
@@ -83,10 +83,9 @@ All of these apply only for the launch session and are recorded in `~/.local/sta
 | KDE background helpers skipped (Baloo indexing, Discover notifier, KDE Connect, print applet) | `Hidden=true` overrides, `systemctl --user mask --runtime kde-baloo.service` |
 | No splash screen | `systemctl --user mask --runtime plasma-ksplash.service` |
 | Minimal desktop | `systemctl --user mask --runtime plasma-plasmashell.service` |
-| Tearing for Moonlight | `vsync=false`, `framepacing=false` in `Moonlight.conf`, restored afterwards. KWin allows tearing by default. |
 | Performance mode | `steamosctl set-gpu-performance-level high` (re-applied while the app runs, because desktop Steam resets it) and `set-cpu-scaling-governor performance` |
 
-Your own autostart apps and services, such as Syncthing, are never touched.
+Your own autostart apps and services (such as Syncthing) and your apps' own settings are never touched.
 
 Steam is started directly as `/usr/lib/steam/steam -steamdeck -silent -noverifyfiles -skipinitialbootstrap -norepairfiles`. It skips the `/usr/bin/steam` wrapper because the wrapper adds `-pipewire`, which on a Wayland desktop makes Steam ask for screen-capture permission every session. The flags also skip the file check Steam would otherwise run after Gaming Mode's Steam is shut down abruptly.
 

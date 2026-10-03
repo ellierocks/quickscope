@@ -323,7 +323,6 @@ class Plugin:
                 # Opinionated session tuning; Quickscope owns this session.
                 "quiet_session": True,
                 "performance": True,
-                "app_tuning": True,
                 "launch_delay": s["launch_delay"],
             }
 
