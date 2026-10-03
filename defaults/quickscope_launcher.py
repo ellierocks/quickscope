@@ -37,12 +37,12 @@ LOADING_SCREEN = os.path.join(STATE, "loading.qml")
 SELF = os.path.abspath(__file__)
 
 AUTOSTART_DIR = os.path.join(HOME, ".config", "autostart")
+KSPLASHRC = os.path.join(HOME, ".config", "ksplashrc")
 ONESHOT_AUTOSTART = os.path.join(AUTOSTART_DIR, "quickscope-oneshot.desktop")
 UNIT_DIR = os.path.join(HOME, ".config", "systemd", "user")
 UNIT_NAME = "quickscope-launch.service"
 UNIT_TARGET = "plasma-core.target"
 PLASMASHELL_UNIT = "plasma-plasmashell.service"
-KSPLASH_UNIT = "plasma-ksplash.service"
 KWIN_SCRIPT_NAME = "quickscope-session"
 STEAM_FAST_START_ARGS = ["-silent", "-noverifyfiles", "-skipinitialbootstrap", "-norepairfiles"]
 STEAMOS_CLIENT = "/usr/lib/steam/steam"
@@ -302,6 +302,8 @@ def restore(reload=True, restart_shell=False):
             log(f"failed to unmask {unit}")
         elif restart_shell and unit == PLASMASHELL_UNIT:
             systemctl("start", "--no-block", unit)
+    if "splash_engine" in undo:
+        restore_splash(undo["splash_engine"])
     perf = undo.get("performance", {})
     if perf.get("gpu"):
         run(["steamosctl", "set-gpu-performance-level", perf["gpu"]])
@@ -382,6 +384,51 @@ def hide_autostart(should_hide):
     return hidden
 
 
+def kconfig_tool(kind):
+    """kreadconfig6/kwriteconfig6 (or the Plasma 5 names)."""
+    return shutil.which(f"k{kind}config6") or shutil.which(f"k{kind}config5")
+
+
+def disable_splash():
+    """Turn the Plasma splash off for this session only.
+
+    Plasma starts the splash over D-Bus activation, not through
+    plasma-ksplash.service, so masking that unit doesn't stop it. KDE's own
+    switch is ksplashrc's Engine=none; the original value is restored after.
+    """
+    read, write = kconfig_tool("read"), kconfig_tool("write")
+    if not (read and write):
+        log("kreadconfig/kwriteconfig not found, leaving the splash on")
+        return
+    current = run([read, "--file", "ksplashrc", "--group", "KSplash", "--key", "Engine"])
+    if not succeeded(current):
+        return
+    original = current.stdout.strip() or None  # None: key wasn't set
+    if original == "none":
+        return
+    file_existed = os.path.exists(KSPLASHRC)
+    if succeeded(run([write, "--file", "ksplashrc", "--group", "KSplash", "--key", "Engine", "none"])):
+        record_undo("splash_engine", {"value": original, "file_existed": file_existed})
+        log(f"splash off for this session (Engine was {original!r})")
+
+
+def restore_splash(undo):
+    original = undo.get("value")
+    if not undo.get("file_existed", True):
+        # We created ksplashrc just for this session.
+        remove(KSPLASHRC)
+        log("removed session-only ksplashrc")
+        return
+    write = kconfig_tool("write")
+    if not write:
+        return
+    if original is None:
+        run([write, "--file", "ksplashrc", "--group", "KSplash", "--key", "Engine", "--delete"])
+    else:
+        run([write, "--file", "ksplashrc", "--group", "KSplash", "--key", "Engine", original])
+    log(f"restored splash Engine {original!r}")
+
+
 def prepare():
     restore(reload=False)
     pending = read_json(PENDING)
@@ -401,9 +448,12 @@ def prepare():
         or (quiet and not is_user and name in QUIET_AUTOSTART)
     ))
 
-    to_mask = []
+    # The splash waits for the Plasma panel, so with the minimal desktop it
+    # would sit there until it times out.
     if pending.get("skip_splash") or pending.get("minimal_desktop"):
-        to_mask.append(KSPLASH_UNIT)
+        disable_splash()
+
+    to_mask = []
     if pending.get("minimal_desktop"):
         to_mask.append(PLASMASHELL_UNIT)
     if quiet:
@@ -449,15 +499,6 @@ def claim_pending():
     return pending
 
 
-def session_type():
-    # The systemd user environment can be left over from Gaming Mode, so ask
-    # which compositor unit is actually running.
-    for kind in ("wayland", "x11"):
-        if succeeded(systemctl("is-active", "--quiet", f"plasma-kwin_{kind}.service")):
-            return kind
-    return os.environ.get("XDG_SESSION_TYPE", "unknown")
-
-
 def wait_for_kwin():
     deadline = time.monotonic() + KWIN_TIMEOUT
     while time.monotonic() < deadline:
@@ -466,47 +507,6 @@ def wait_for_kwin():
             return True
         time.sleep(0.1)
     return False
-
-
-def compositing_active():
-    out = dbus("org.kde.KWin", "/Compositor", "org.freedesktop.DBus.Properties.Get",
-               "string:org.kde.kwin.Compositing", "string:active")
-    return None if out is None else "boolean true" in out
-
-
-def toggle_compositing():
-    # Plasma 6 dropped the D-Bus suspend/resume calls; KWin's "Suspend
-    # Compositing" shortcut (Alt+Shift+F12) is the remaining toggle.
-    return dbus("org.kde.kglobalaccel", "/component/kwin", "org.kde.kglobalaccel.Component.invokeShortcut",
-                "string:Suspend Compositing") is not None
-
-
-def wait_compositing(want, timeout):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if compositing_active() is want:
-            return True
-        time.sleep(0.1)
-    return False
-
-
-def suspend_compositing():
-    if compositing_active() is not True:
-        return False
-    # kglobalaccel may still be starting this early in the session.
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        if toggle_compositing() and wait_compositing(False, 1):
-            log("compositing suspended")
-            return True
-        time.sleep(0.25)
-    log("could not suspend compositing")
-    return False
-
-
-def resume_compositing():
-    if compositing_active() is False and toggle_compositing():
-        log("compositing resumed")
 
 
 def load_session_script(force_fullscreen, loading):
@@ -672,8 +672,8 @@ def launch():
     pending = claim_pending()
     if pending is None:
         return 0
-    session = session_type()
-    log(f"--- {pending.get('name')} ({pending.get('appid')}), mode={pending.get('mode')}, session={session}")
+    log(f"--- {pending.get('name')} ({pending.get('appid')}), mode={pending.get('mode')}, "
+        f"session={os.environ.get('XDG_SESSION_TYPE', '?')}")
 
     if wait_for_kwin():
         log(f"KWin ready after {time.monotonic() - started:.1f}s")
@@ -695,7 +695,6 @@ def launch():
         timer.start()
 
     keeper = boost_performance() if pending.get("performance", True) else None
-    suspended = pending.get("suspend_compositor") and session == "x11" and suspend_compositing()
     returning = pending.get("return_to_gaming")
     try:
         log(f"launching {time.monotonic() - started:.1f}s after start")
@@ -711,8 +710,6 @@ def launch():
         close_loading_screen(loading)
         if keeper:
             keeper.stop()
-        if suspended:
-            resume_compositing()
         if script:
             unload_session_script()
         # Undo before returning: the logout ends this process.

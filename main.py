@@ -11,9 +11,6 @@ import decky
 SETTINGS_DEFAULTS = {
     # Return to Gaming Mode once the launched app exits.
     "return_to_gaming": True,
-    # Suspend KWin compositing while the app runs (X11 only; Wayland KWin
-    # already does direct scanout for fullscreen windows).
-    "suspend_compositor": True,
     # Fullscreen the app's first window via a temporary KWin script.
     "force_fullscreen": True,
     # Skip the Plasma splash screen for the launch session.
@@ -22,10 +19,6 @@ SETTINGS_DEFAULTS = {
     "minimal_desktop": True,
     # Show a fullscreen loading screen until the app's window appears.
     "loading_screen": True,
-    # "auto" uses the system's default desktop session (steamosctl
-    # get-default-desktop-session); "plasma" forces X11, "plasma-wayland"
-    # forces Wayland.
-    "desktop_session": "auto",
     # Extra seconds to wait after KWin is ready before launching.
     "launch_delay": 0,
     "favorites": [],
@@ -37,13 +30,10 @@ SETTINGS_DEFAULTS = {
     "launch_modes": {},
 }
 
-DESKTOP_SESSIONS = ("auto", "plasma", "plasma-wayland")
-# steamosctl switch-to-desktop-mode arguments for each setting.
-STEAMOSCTL_SESSIONS = {
-    "auto": [],
-    "plasma": ["plasmax11.desktop"],
-    "plasma-wayland": ["plasma.desktop"],
-}
+# Always Plasma on Wayland. Measured on the Deck it launches faster, holds
+# fullscreen reliably and shows the loading screen; on X11 the app could leave
+# fullscreen and startup was slower.
+WAYLAND_SESSION = "plasma.desktop"
 LAUNCH_MODES = ("hybrid", "direct")
 DEFAULT_SHORTCUT_MODE = "hybrid"
 
@@ -234,8 +224,6 @@ class Plugin:
         except (OSError, ValueError) as e:
             decky.logger.warning(f"Could not read settings, using defaults: {e}")
             self.settings = dict(SETTINGS_DEFAULTS)
-        if self.settings["desktop_session"] not in DESKTOP_SESSIONS:
-            self.settings["desktop_session"] = "auto"
         # Drops the removed "steam" per-app method; those apps get the default.
         self.settings["launch_modes"] = {
             k: v for k, v in self.settings["launch_modes"].items() if v in LAUNCH_MODES}
@@ -260,8 +248,6 @@ class Plugin:
     async def set_setting(self, key, value):
         if key not in SETTINGS_DEFAULTS:
             raise ValueError(f"Unknown setting: {key}")
-        if key == "desktop_session" and value not in DESKTOP_SESSIONS:
-            raise ValueError(f"Unknown desktop session: {value}")
         if key == "launch_delay":
             value = max(0, min(15, int(value)))
         elif key == "favorites":
@@ -276,7 +262,6 @@ class Plugin:
 
     async def get_environment(self):
         return {
-            "session_select": (_which("steamosctl") or _which("steamos-session-select")) is not None,
             "launcher_found": _launcher_source() is not None,
             "pending": os.path.exists(_paths()["pending"]),
         }
@@ -315,7 +300,6 @@ class Plugin:
                 "cwd": _strip_quotes(spec.get("start_dir")) or None,
                 "gameid": gameid,
                 "return_to_gaming": s["return_to_gaming"],
-                "suspend_compositor": s["suspend_compositor"],
                 "force_fullscreen": s["force_fullscreen"],
                 "skip_splash": s["skip_splash"],
                 "minimal_desktop": s["minimal_desktop"],
@@ -344,19 +328,16 @@ class Plugin:
             await self._cleanup()
             return {"ok": False, "error": str(e)}
 
-    async def switch_session(self, session):
-        """Switch out of Gaming Mode into the chosen (or default) desktop session."""
-        if session not in DESKTOP_SESSIONS:
-            session = "auto"
+    async def switch_session(self):
+        """Switch out of Gaming Mode into Plasma on Wayland."""
         steamosctl = _which("steamosctl")
         if steamosctl:
-            # No session argument means the system's default desktop session.
-            cmd = [steamosctl, "switch-to-desktop-mode", *STEAMOSCTL_SESSIONS[session]]
+            cmd = [steamosctl, "switch-to-desktop-mode", WAYLAND_SESSION]
         else:
             exe = _which("steamos-session-select")
             if exe is None:
                 return {"ok": False, "error": "neither steamosctl nor steamos-session-select found"}
-            cmd = [exe, "plasma-wayland" if session == "plasma-wayland" else "plasma"]
+            cmd = [exe, "plasma-wayland"]
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,

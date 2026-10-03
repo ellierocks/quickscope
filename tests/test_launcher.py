@@ -64,6 +64,69 @@ class QuietAutostart(LauncherTestCase):
         self.assertEqual(os.listdir(self.l.AUTOSTART_DIR), [user_app])
 
 
+class Splash(LauncherTestCase):
+    def fake_kconfig(self, stored):
+        """Stub run() as kreadconfig6/kwriteconfig6 over a dict; return the call log."""
+        calls = []
+
+        class Result:
+            def __init__(self, out=""):
+                self.returncode, self.stdout = 0, out
+
+        def run(cmd):
+            calls.append(cmd)
+            key = cmd[cmd.index("--key") + 1]
+            if cmd[0] == "kreadconfig6":
+                return Result(stored.get(key, "") + "\n")
+            if "--delete" in cmd:
+                stored.pop(key, None)
+            else:
+                stored[key] = cmd[-1]
+            return Result()
+
+        self.l.run = run
+        self.l.kconfig_tool = lambda kind: f"k{kind}config6"
+        return calls
+
+    def write_ksplashrc(self):
+        self.l.write_file(self.l.KSPLASHRC, "[KSplash]\n")
+
+    def test_session_created_file_is_removed(self):
+        stored = {}
+        self.fake_kconfig(stored)
+        self.l.disable_splash()
+        self.assertEqual(stored, {"Engine": "none"})
+        self.write_ksplashrc()  # what kwriteconfig6 would have created
+        self.l.restore(reload=False)
+        self.assertFalse(os.path.exists(self.l.KSPLASHRC))
+
+    def test_unset_engine_in_existing_file_is_deleted_again(self):
+        self.write_ksplashrc()
+        stored = {}
+        self.fake_kconfig(stored)
+        self.l.disable_splash()
+        self.l.restore(reload=False)
+        self.assertEqual(stored, {})
+        self.assertTrue(os.path.exists(self.l.KSPLASHRC))
+
+    def test_existing_engine_is_restored(self):
+        self.write_ksplashrc()
+        stored = {"Engine": "KSplashQML"}
+        self.fake_kconfig(stored)
+        self.l.disable_splash()
+        self.assertEqual(stored["Engine"], "none")
+        self.l.restore(reload=False)
+        self.assertEqual(stored, {"Engine": "KSplashQML"})
+
+    def test_already_off_is_left_alone(self):
+        stored = {"Engine": "none"}
+        calls = self.fake_kconfig(stored)
+        self.l.disable_splash()
+        self.l.restore(reload=False)
+        self.assertEqual(stored, {"Engine": "none"})
+        self.assertFalse(any(c[0] == "kwriteconfig6" for c in calls))
+
+
 class SessionScript(LauncherTestCase):
     @unittest.skipUnless(shutil.which("node"), "node not installed")
     def test_templated_kwin_script_is_valid_js(self):

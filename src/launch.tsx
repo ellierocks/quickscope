@@ -7,7 +7,6 @@ import {
   Settings,
   ShortcutMode,
   cancelPending,
-  getSettings,
   prepareLaunch,
   switchSession,
 } from "./backend";
@@ -46,7 +45,7 @@ function confirm(title: string, description: string, okText: string): Promise<bo
 }
 
 /** Stage a Quickscope launch of `app` and leave Gaming Mode. */
-export async function launch(app: LibraryApp, settings?: Settings) {
+export async function launch(app: LibraryApp) {
   const running = Router.MainRunningApp;
   if (running) {
     const ok = await confirm(
@@ -56,8 +55,6 @@ export async function launch(app: LibraryApp, settings?: Settings) {
     );
     if (!ok) return;
   }
-  settings ??= await getSettings();
-
   const spec: LaunchSpec = { appid: app.appid, name: app.name, kind: app.kind };
   if (app.kind === "shortcut") {
     const details = await getShortcutDetails(app.appid);
@@ -79,7 +76,7 @@ export async function launch(app: LibraryApp, settings?: Settings) {
       : staged.mode ? ` (${MODE_NAMES[staged.mode]})` : "";
   toast(`Leaving Gamescope for ${app.name}${via}…`);
 
-  const switched = await switchSession(settings.desktop_session);
+  const switched = await switchSession();
   if (!switched.ok) {
     // Steam's own Switch to Desktop as a last resort; it picks its own session.
     try {

@@ -8,7 +8,11 @@ A [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin for t
 
 </div>
 
-Quickscope hands the screen to a single app in a stripped-down desktop session (KWin, no panel, nothing in the background) and returns you to Gaming Mode when the app exits. From pressing **A** to Moonlight on screen takes about **6 seconds**.
+Quickscope hands the screen to a single app in a stripped-down Plasma Wayland session (KWin, no panel, nothing in the background) and returns you to Gaming Mode when the app exits. From pressing **A** to Moonlight on screen takes about **6 seconds**.
+
+## Why
+
+In testing on a Steam Deck LCD, streaming Arkham Knight with Moonlight over **HEVC**, Gaming Mode showed latency spikes of up to **8 ms** that didn't occur under Quickscope. With the **PyroWave** codec the difference was small, because its very fast decode masks most of Gamescope's overhead. Your results will depend on your codec, network and host.
 
 ## Features
 
@@ -60,8 +64,6 @@ Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quicksc
 | Loading screen | On |
 | Skip splash screen | On |
 | Minimal desktop (no Plasma panel) | On |
-| Suspend compositor *(X11 sessions only)* | On |
-| Desktop session | System default |
 | Extra launch delay | 0 s |
 
 ## Troubleshooting
@@ -73,7 +75,7 @@ Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quicksc
 <details>
 <summary><b>How it works</b></summary>
 
-1. The plugin stages the launch, applies the session tweaks below, and switches to your default desktop session (`steamosctl switch-to-desktop-mode`). If Gamescope hangs while shutting down, Quickscope ends it after 3 s instead of waiting out systemd's 10 s timeout.
+1. The plugin stages the launch, applies the session tweaks below, and switches to Plasma on Wayland (`steamosctl switch-to-desktop-mode plasma.desktop`). Wayland is always used: on X11, apps could leave fullscreen and startup was slower. If Gamescope hangs while shutting down, Quickscope ends it after 3 s instead of waiting out systemd's 10 s timeout.
 2. A systemd user unit, `quickscope-launch.service`, starts the launcher as soon as KWin is up, before Plasma's panel or autostart apps.
 3. The launcher shows the loading screen, loads a temporary KWin script (fullscreen and focus the app's first window, then close the loading screen) and starts the app.
 4. When the app exits, every tweak is undone and the Deck returns to Gaming Mode.
@@ -84,10 +86,11 @@ Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quicksc
 |---|---|
 | Steam's own desktop autostart skipped | `Hidden=true` override in `~/.config/autostart` |
 | KDE helpers skipped (Baloo, Discover notifier, KDE Connect, print applet) | `Hidden=true` overrides, `systemctl --user mask --runtime kde-baloo.service` |
-| No splash screen / no Plasma panel | `systemctl --user mask --runtime plasma-ksplash.service` / `plasma-plasmashell.service` |
+| No splash screen | `Engine=none` in `~/.config/ksplashrc` (KDE's own switch), restored afterwards |
+| No Plasma panel | `systemctl --user mask --runtime plasma-plasmashell.service` |
 | Performance mode | `steamosctl set-gpu-performance-level high` (re-applied while running) and `set-cpu-scaling-governor performance` |
 
-Everything lives in `~/.config` or `/run`, never in files a SteamOS update replaces.
+Everything lives in `~/.config` or `/run`, never in files a SteamOS update replaces. If Quickscope had to create `ksplashrc`, it deletes it again afterwards.
 
 Steam is started as `/usr/lib/steam/steam -steamdeck -silent -noverifyfiles -skipinitialbootstrap -norepairfiles`. It bypasses the `/usr/bin/steam` wrapper, whose `-pipewire` flag triggers a screen-capture permission prompt every session on Wayland. The flags also skip the file check Steam runs after Gaming Mode's Steam is shut down abruptly.
 

@@ -1,7 +1,6 @@
 import {
   ButtonItem,
   DialogButton,
-  DropdownItem,
   PanelSection,
   PanelSectionRow,
   SliderField,
@@ -14,7 +13,6 @@ import { useEffect, useMemo, useState } from "react";
 import { FaCrosshairs } from "react-icons/fa";
 
 import {
-  DesktopSession,
   Environment,
   Settings,
   cancelPending,
@@ -28,12 +26,6 @@ import { LibraryApp, getLibraryApps } from "./library";
 
 const RECENT_COUNT = 8;
 const SEARCH_COUNT = 20;
-
-const SESSION_OPTIONS: { data: DesktopSession; label: string }[] = [
-  { data: "auto", label: "System default" },
-  { data: "plasma", label: "Plasma X11" },
-  { data: "plasma-wayland", label: "Plasma Wayland" },
-];
 
 function AppRow({
   app,
@@ -109,7 +101,7 @@ function Content() {
   const onLaunch = async (app: LibraryApp) => {
     setBusy(true);
     try {
-      await launch(app, settings);
+      await launch(app);
     } catch (e) {
       toast(`Launch failed: ${e}`);
     } finally {
@@ -208,14 +200,6 @@ function Content() {
             onChange={(v) => update("force_fullscreen", v)}
           />
         </PanelSectionRow>
-        <PanelSectionRow>
-          <ToggleField
-            label="Suspend desktop compositor"
-            description="X11 sessions only. Wayland already uses direct scanout for fullscreen."
-            checked={settings.suspend_compositor}
-            onChange={(v) => update("suspend_compositor", v)}
-          />
-        </PanelSectionRow>
       </PanelSection>
 
       <PanelSection title="Faster startup">
@@ -240,19 +224,6 @@ function Content() {
             description="Skip the Plasma panel and desktop entirely. Only KWin and your app run."
             checked={settings.minimal_desktop}
             onChange={(v) => update("minimal_desktop", v)}
-          />
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <DropdownItem
-            label="Desktop session"
-            description={
-              env && !env.session_select
-                ? "steamosctl not found; falling back to Steam's Switch to Desktop."
-                : "System default follows SteamOS's default desktop session."
-            }
-            rgOptions={SESSION_OPTIONS}
-            selectedOption={settings.desktop_session}
-            onChange={(o) => update("desktop_session", o.data as DesktopSession)}
           />
         </PanelSectionRow>
         <PanelSectionRow>

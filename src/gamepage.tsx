@@ -50,8 +50,9 @@ function QuickscopeButton({ overview }: { overview: any }) {
           display: "flex",
           alignItems: "center",
           gap: "8px",
-          background: "rgba(14, 20, 27, 0.75)",
-          backdropFilter: "blur(8px)",
+          // No custom background: Steam's own button styles swap to a light
+          // background with dark text on focus, and overriding the background
+          // left dark text on dark.
         }}
       >
         <FaCrosshairs />
