@@ -1,7 +1,17 @@
 import { ConfirmModal, Router, showModal } from "@decky/ui";
 import { toaster } from "@decky/api";
 
-import { LaunchMode, LaunchSpec, Settings, ShortcutMode, cancelPending, prepareLaunch, switchSession } from "./backend";
+import {
+  LaunchMode,
+  LaunchSpec,
+  MoonlightApp,
+  MoonlightHost,
+  Settings,
+  ShortcutMode,
+  cancelPending,
+  prepareLaunch,
+  switchSession,
+} from "./backend";
 import { hideLaunchingPage, showLaunchingPage } from "./launching";
 import { LibraryApp, getShortcutDetails, steamSwitchToDesktop } from "./library";
 
@@ -38,7 +48,28 @@ function confirm(title: string, description: string, okText: string): Promise<bo
 }
 
 /** Stage a Quickscope launch of `app` and leave Gaming Mode. */
-export async function launch(app: LibraryApp) {
+export function launch(app: LibraryApp) {
+  return stageAndSwitch(app.name, async () => {
+    const spec: LaunchSpec = { appid: app.appid, name: app.name, kind: app.kind };
+    if (app.kind === "shortcut") {
+      const details = await getShortcutDetails(app.appid);
+      if (details) {
+        spec.exe = details.exe;
+        spec.start_dir = details.startDir;
+        spec.launch_options = details.launchOptions;
+      }
+    }
+    return spec;
+  });
+}
+
+/** Stream a host app straight away with Moonlight, skipping its menus. */
+export function launchStream(host: MoonlightHost, app: MoonlightApp) {
+  const name = app.name.trim();
+  return stageAndSwitch(name, async () => ({ appid: app.id, name, kind: "stream", host: host.name, app: app.name }));
+}
+
+async function stageAndSwitch(name: string, buildSpec: () => Promise<LaunchSpec>) {
   const running = Router.MainRunningApp;
   if (running) {
     const ok = await confirm(
@@ -50,26 +81,17 @@ export async function launch(app: LibraryApp) {
   }
 
   // Straight to the launching page; staging (about 2 s) happens behind it.
-  await showLaunchingPage(app.name);
+  await showLaunchingPage(name);
   try {
-    const spec: LaunchSpec = { appid: app.appid, name: app.name, kind: app.kind };
-    if (app.kind === "shortcut") {
-      const details = await getShortcutDetails(app.appid);
-      if (details) {
-        spec.exe = details.exe;
-        spec.start_dir = details.startDir;
-        spec.launch_options = details.launchOptions;
-      }
-    }
-
+    const spec = await buildSpec();
     const staged = await prepareLaunch(spec);
     if (!staged.ok) {
       hideLaunchingPage();
       toast(`Couldn't stage launch: ${staged.error}`);
       return;
     }
-    if (app.kind === "shortcut" && staged.mode === "steam") {
-      toast(`${app.name}: launching through Steam, couldn't read the shortcut`);
+    if (spec.kind === "shortcut" && staged.mode === "steam") {
+      toast(`${name}: launching through Steam, couldn't read the shortcut`);
     }
 
     const switched = await switchSession();

@@ -135,6 +135,25 @@ async def _steamosctl_value(command):
     return out.decode(errors="replace").rsplit(":", 1)[-1].strip() or None
 
 
+MOONLIGHT_FLATPAK = "com.moonlight_stream.Moonlight"
+
+
+def _moonlight_stream_command(host, app):
+    """Moonlight's `stream <host> <app>` command: the Flatpak (user or system
+    install), else a native `moonlight`. None if neither is installed."""
+    flatpak_dirs = [
+        os.path.join(decky.DECKY_USER_HOME, ".local", "share", "flatpak", "app", MOONLIGHT_FLATPAK),
+        os.path.join("/var/lib/flatpak/app", MOONLIGHT_FLATPAK),
+    ]
+    if any(os.path.isdir(d) for d in flatpak_dirs) and _which("flatpak"):
+        base = ["flatpak", "run", MOONLIGHT_FLATPAK]
+    elif _which("moonlight"):
+        base = ["moonlight"]
+    else:
+        return None
+    return shlex.join([*base, "stream", host, app])
+
+
 def _launcher_source():
     # The decky CLI copies defaults/* into the plugin root; during development
     # the file is still under defaults/.
@@ -366,6 +385,16 @@ class Plugin:
         except (ValueError, IndexError):
             return None
 
+    async def get_moonlight_hosts(self):
+        """Moonlight's saved hosts and their apps: [{name, uuid, apps: [{id, name}]}]."""
+        code, out = await _run_launcher("--moonlight-hosts")
+        if code != 0:
+            return []
+        try:
+            return json.loads(out.splitlines()[-1])
+        except (ValueError, IndexError):
+            return []
+
     async def save_diagnostics(self):
         """Write a shareable report to ~/Downloads for bug reports. Returns its path."""
         code, report = await _run_launcher("--diagnostics")
@@ -398,13 +427,21 @@ class Plugin:
             appid = int(spec["appid"])
             name = str(spec.get("name") or appid)
             kind = spec.get("kind")
-            if kind not in ("steam", "shortcut"):
+            if kind not in ("steam", "shortcut", "stream"):
                 return {"ok": False, "error": f"Unknown app kind: {kind}"}
             if _install_launcher() is None:
                 return {"ok": False, "error": "quickscope_launcher.py is missing from the plugin install"}
 
-            mode, command, gameid = "steam", None, None
-            if kind == "shortcut":
+            mode, command, gameid, stream = "steam", None, None, None
+            if kind == "stream":
+                # Straight into a host app with Moonlight's `stream` command. Hybrid:
+                # desktop Steam runs alongside for the controller layout.
+                stream = {"host": str(spec["host"]), "app": str(spec["app"])}
+                command = _moonlight_stream_command(stream["host"], stream["app"])
+                if not command:
+                    return {"ok": False, "error": "Moonlight isn't installed"}
+                mode = DEFAULT_SHORTCUT_MODE
+            elif kind == "shortcut":
                 command = build_direct_command(spec.get("exe"), spec.get("launch_options"))
                 if command:
                     mode = self.settings["launch_modes"].get(str(appid), DEFAULT_SHORTCUT_MODE)
@@ -438,6 +475,7 @@ class Plugin:
                 "display_scale": s["display_scale"],
                 "moonlight_override": s["moonlight_override"],
                 "moonlight_profiles": s["moonlight_profiles"],
+                "stream": stream,
             }
 
             path = _paths()["pending"]

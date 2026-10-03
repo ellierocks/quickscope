@@ -92,6 +92,18 @@ class PrepareLaunch(unittest.TestCase):
         mode, pending = self.stage({"appid": 570, "name": "Dota 2", "kind": "steam"})
         self.assertEqual((mode, pending["gameid"]), ("steam", 570))
 
+    def test_stream_launch_runs_moonlight_stream(self):
+        os.makedirs(
+            os.path.join(TMP, ".local", "share", "flatpak", "app", "com.moonlight_stream.Moonlight"), exist_ok=True
+        )
+        real_which = main._which
+        main._which = lambda cmd: f"/usr/bin/{cmd}" if cmd == "flatpak" else None
+        self.addCleanup(setattr, main, "_which", real_which)
+        mode, pending = self.stage({"appid": 4, "name": "Resume", "kind": "stream", "host": "star", "app": "  Resume"})
+        self.assertEqual(mode, "hybrid")
+        self.assertEqual(pending["command"], "flatpak run com.moonlight_stream.Moonlight stream star '  Resume'")
+        self.assertEqual(pending["stream"], {"host": "star", "app": "  Resume"})
+
     def test_unknown_launch_modes_are_dropped(self):
         asyncio.run(self.plugin.set_setting("launch_modes", {"1": "direct", "2": "steam", "3": "bogus"}))
         self.assertEqual(self.plugin.settings["launch_modes"], {"1": "direct"})

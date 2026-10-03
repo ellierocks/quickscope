@@ -1,6 +1,8 @@
 """Tests for defaults/quickscope_launcher.py, run against a temporary HOME."""
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import pathlib
@@ -773,6 +775,98 @@ class LogTrim(LauncherTestCase):
         self.l.trim_log(keep=10)
         with open(self.l.LOG) as f:
             self.assertEqual(f.read(), "a\nb\n")
+
+
+MOONLIGHT_HOSTS_CONF = r"""[General]
+width=1280
+
+[hosts]
+1\apps\1\hidden=false
+1\apps\1\id=749207497
+1\apps\1\name="     Desktop"
+1\apps\2\hidden=true
+1\apps\2\id=2
+1\apps\2\name=Secret
+1\apps\3\hidden=false
+1\apps\3\id=3
+1\apps\3\name=Steam Big Picture
+1\apps\size=3
+1\hostname=star
+1\srvcert=@ByteArray(-----BEGIN CERTIFICATE-----)
+1\localaddress=192.168.1.73
+1\uuid=D2A7582E
+size=1
+"""
+
+
+class StreamLaunch(LauncherTestCase):
+    def test_hosts_without_secrets_or_hidden_apps(self):
+        path = os.path.join(self.home, "Moonlight.conf")
+        self.l.write_file(path, MOONLIGHT_HOSTS_CONF)
+        hosts = self.l.moonlight_hosts(path)
+        self.assertEqual(
+            hosts,
+            [
+                {
+                    "name": "star",
+                    "uuid": "D2A7582E",
+                    "apps": [{"id": 749207497, "name": "     Desktop"}, {"id": 3, "name": "Steam Big Picture"}],
+                }
+            ],
+        )
+        self.assertNotIn("192.168", json.dumps(hosts))
+
+    def test_hold_closes_after_every_reason(self):
+        closed = []
+        self.l.close_loading_screen = closed.append
+        hold = self.l.LoadingHold("loading", ["network", "stream"])
+        hold.status("network", "Waiting for the network…")
+        hold.status("stream", "Starting Desktop…")
+        hold.release("network")
+        self.assertEqual(closed, [])
+        with open(self.l.LOADING_STATUS) as f:
+            self.assertEqual(f.read(), "Starting Desktop…")
+        hold.release("stream")
+        self.assertEqual(closed, ["loading"])
+
+    def run_watcher(self, lines):
+        closed, statuses = [], []
+        self.l.close_loading_screen = closed.append
+        hold = self.l.LoadingHold("loading", ["stream"])
+        real_status = hold.status
+        hold.status = lambda reason, text: (statuses.append(text), real_status(reason, text))
+        released_at = []
+        real_release = hold.release
+
+        def release(reason):
+            if not released_at:
+                released_at.append(len(statuses))
+            real_release(reason)
+
+        hold.release = release
+
+        class Proc:
+            stdout = iter(lines)
+
+        # Moonlight's output is passed through to stdout (the journal).
+        with contextlib.redirect_stdout(io.StringIO()) as passed_through:
+            self.l.watch_stream(Proc, hold, {"host": "star", "app": "  Resume"}, time.monotonic())
+        self.assertEqual(passed_through.getvalue(), "".join(lines))
+        return statuses, closed
+
+    def test_watcher_hands_over_when_video_starts(self):
+        statuses, closed = self.run_watcher(
+            [
+                "00:00:01 - SDL Info (0): Starting RTSP handshake...\n",
+                "00:00:02 - SDL Info (0): Video stream is 1920x1200x60 (format 0x10000)\n",
+            ]
+        )
+        self.assertEqual(statuses, ["Connecting to star…", "Starting Resume…"])
+        self.assertEqual(closed, ["loading"])
+
+    def test_watcher_hands_over_on_failure(self):
+        _, closed = self.run_watcher(["00:00:01 - Qt Critical: Network unreachable (Error 99)\n"])
+        self.assertEqual(closed, ["loading"])
 
 
 class Diagnostics(LauncherTestCase):

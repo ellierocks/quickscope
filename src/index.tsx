@@ -21,14 +21,17 @@ import {
   cancelPending,
   getDisplays,
   getEnvironment,
+  getMoonlightHosts,
   getSettings,
+  MoonlightApp,
+  MoonlightHost,
   saveDiagnostics,
   setSetting,
 } from "./backend";
 import { patchGamePage } from "./gamepage";
 import { addLaunchingRoute } from "./launching";
 import { addMoonlightRoute, openMoonlightPage } from "./moonlight";
-import { MODE_NAMES, effectiveMode, launch, toast } from "./launch";
+import { MODE_NAMES, effectiveMode, launch, launchStream, toast } from "./launch";
 import { LibraryApp, getLibraryApps, getSteamBrightness } from "./library";
 
 const POWER_PROFILES: { data: PowerProfile; label: string; description: string }[] = [
@@ -68,7 +71,6 @@ function sortModes(modes: string[]): string[] {
   });
 }
 
-const RECENT_COUNT = 8;
 const SEARCH_COUNT = 20;
 
 function AppRow({
@@ -123,22 +125,29 @@ function Content() {
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
   const [display, setDisplay] = useState<DisplayInfo | null>(null);
+  const [hosts, setHosts] = useState<MoonlightHost[]>([]);
 
   useEffect(() => {
     getSettings().then(setSettings);
     getEnvironment().then(setEnv);
     getDisplays().then(setDisplay);
+    getMoonlightHosts().then(setHosts);
   }, []);
+
+  // Quickscope is built for Moonlight: its shortcut(s) lead the panel.
+  const moonlight = useMemo(() => apps.filter((a) => a.kind === "shortcut" && /moonlight/i.test(a.name)), [apps]);
 
   const pinned = useMemo(() => {
     const ids = settings?.favorites ?? [];
-    return ids.map((id) => apps.find((a) => a.appid === id)).filter((a): a is LibraryApp => !!a);
-  }, [apps, settings?.favorites]);
+    return ids
+      .map((id) => apps.find((a) => a.appid === id))
+      .filter((a): a is LibraryApp => !!a && !moonlight.includes(a));
+  }, [apps, moonlight, settings?.favorites]);
 
+  // Everything else (other shortcuts, Steam games) only through search.
   const listed = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    if (!q) return apps.slice(0, RECENT_COUNT);
-    return apps.filter((a) => a.name.toLowerCase().includes(q)).slice(0, SEARCH_COUNT);
+    return q ? apps.filter((a) => a.name.toLowerCase().includes(q)).slice(0, SEARCH_COUNT) : [];
   }, [apps, filter]);
 
   if (!settings) return null;
@@ -157,6 +166,17 @@ function Content() {
     setBusy(true);
     try {
       await launch(app);
+    } catch (e) {
+      toast(`Launch failed: ${e}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onStream = async (host: MoonlightHost, app: MoonlightApp) => {
+    setBusy(true);
+    try {
+      await launchStream(host, app);
     } catch (e) {
       toast(`Launch failed: ${e}`);
     } finally {
@@ -225,14 +245,49 @@ function Content() {
         </PanelSection>
       )}
 
+      <PanelSection title="Moonlight">
+        {moonlight.map(row)}
+        {moonlight.length === 0 && (
+          <PanelSectionRow>
+            <div style={{ opacity: 0.6, fontSize: "0.85em" }}>
+              Add Moonlight as a non-Steam game to launch it here. Other apps are in search below.
+            </div>
+          </PanelSectionRow>
+        )}
+      </PanelSection>
+
+      {/* Moonlight's saved hosts: straight into a host app, skipping Moonlight's menus. */}
+      {hosts
+        .filter((h) => h.apps.length > 0)
+        .map((host) => (
+          <PanelSection key={host.uuid || host.name} title={`Stream from ${host.name}`}>
+            {host.apps.map((app) => (
+              <PanelSectionRow key={`${app.id}-${app.name}`}>
+                <DialogButton
+                  disabled={busy}
+                  onClick={() => onStream(host, app)}
+                  style={{ padding: "8px 12px", minWidth: 0, borderRadius: 0, textAlign: "left" }}
+                >
+                  {app.name.trim()}
+                </DialogButton>
+              </PanelSectionRow>
+            ))}
+          </PanelSection>
+        ))}
+
       {pinned.length > 0 && <PanelSection title="Pinned">{pinned.map(row)}</PanelSection>}
 
-      <PanelSection title={filter.trim() ? "Search" : "Recent"}>
+      <PanelSection title="Other apps">
         <PanelSectionRow>
-          <TextField value={filter} onChange={(e) => setFilter(e.target.value)} />
+          <TextField
+            label="Search"
+            description="Any non-Steam game or installed Steam game."
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+          />
         </PanelSectionRow>
         {listed.map(row)}
-        {listed.length === 0 && (
+        {filter.trim() && listed.length === 0 && (
           <PanelSectionRow>
             <div style={{ opacity: 0.6, fontSize: "0.85em" }}>No matching apps.</div>
           </PanelSectionRow>

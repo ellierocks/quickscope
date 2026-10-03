@@ -14,6 +14,8 @@ returns to Gaming Mode when the app exits.
                print Moonlight's current resolution, frame rate and sync settings
   --diagnostics
                print a shareable report (personal details masked)
+  --moonlight-hosts
+               print Moonlight's saved hosts and their apps, as JSON
   --uninstall  undo tweaks and remove the systemd unit
 
 Every tweak lives in ~/.config or /run and is recorded in undo.json, so
@@ -229,7 +231,19 @@ function onWindowAdded(w) {
     if (!holdLoading) closeLoadingScreen();
 }
 windowAdded.connect(onWindowAdded);
+// Moonlight opens a second window for the stream itself: hand focus to the
+// app's newest window, not its first.
+function isIgnored(w) {
+    return isOwnOverlay(w) || ignored.indexOf(String(w.resourceClass).toLowerCase()) !== -1;
+}
+windowAdded.connect(function (w) {
+    if (appWindow && w && w !== appWindow && w.normalWindow && !isIgnored(w) && w.pid === appWindow.pid) {
+        appWindow = w;
+        focusApp();
+    }
+});
 windowRemoved.connect(function (w) {
+    if (w === appWindow) appWindow = null;
     if (holdLoading && isLoadingScreen(w)) {
         holdLoading = false;
         focusApp();
@@ -1242,26 +1256,23 @@ class NetworkGate(threading.Thread):
     """Hold the loading screen until the network is settled: after desktop
     Steam's NetworkManager restart, or after reconnecting to apply the lock."""
 
-    def __init__(self, loading, expect_restart, reconnect=None):
+    def __init__(self, hold, expect_restart, reconnect=None):
         super().__init__(daemon=True)
-        self.loading = loading
+        self.hold = hold
         self.expect_restart = expect_restart
         self.reconnect = reconnect
         self.pid = networkmanager_pid()
-        self.done = threading.Event()
 
     def run(self):
         try:
             self.wait()
         finally:
-            write_file(LOADING_STATUS, "")
-            close_loading_screen(self.loading)
-            self.done.set()
+            self.hold.release("network")
 
     def wait(self):
         started = time.monotonic()
         if self.reconnect:
-            write_file(LOADING_STATUS, "Connecting to Wi-Fi…")
+            self.hold.status("network", "Connecting to Wi-Fi…")
             if not reconnect_wifi(self.reconnect):
                 log(f"reconnecting {self.reconnect} failed")
         elif self.expect_restart:
@@ -1271,12 +1282,12 @@ class NetworkGate(threading.Thread):
             while networkmanager_pid() == self.pid and time.monotonic() < deadline:
                 if status is None and time.monotonic() - started >= APP_OPEN_TIME:
                     status = "Waiting for the network…"
-                    write_file(LOADING_STATUS, status)
+                    self.hold.status("network", status)
                 time.sleep(NETWORK_POLL)
             if networkmanager_pid() == self.pid:
                 log(f"NetworkManager wasn't restarted within {NM_RESTART_WAIT}s")
                 return
-            write_file(LOADING_STATUS, "Reconnecting to Wi-Fi…")
+            self.hold.status("network", "Reconnecting to Wi-Fi…")
         deadline = time.monotonic() + NETWORK_CONNECT_WAIT
         while not network_connected() and time.monotonic() < deadline:
             time.sleep(NETWORK_POLL)
@@ -1413,6 +1424,90 @@ def restore_moonlight(entry):
         return
     write_ini_values(entry["path"], entry["original"])
     log(f"restored Moonlight settings {sorted(entry['original'])}")
+
+
+def moonlight_hosts(path=None):
+    """Hosts and their apps as Moonlight last saw them, from its settings:
+    [{"name", "uuid", "apps": [{"id", "name"}]}]. Addresses and certificates
+    are never read out. Apps hidden in Moonlight are left out."""
+    hosts = {}
+    try:
+        with open(path or moonlight_conf()) as f:
+            section = None
+            for line in f:
+                line = line.rstrip("\n")
+                if line.startswith("["):
+                    section = line
+                    continue
+                if section != "[hosts]":
+                    continue
+                m = re.match(r"(\d+)\\(hostname|uuid)=(.*)", line)
+                if m:
+                    hosts.setdefault(m.group(1), {"apps": {}})[m.group(2)] = m.group(3)
+                    continue
+                m = re.match(r"(\d+)\\apps\\(\d+)\\(name|id|hidden)=(.*)", line)
+                if m:
+                    app = hosts.setdefault(m.group(1), {"apps": {}})["apps"].setdefault(m.group(2), {})
+                    app[m.group(3)] = m.group(4)
+    except OSError:
+        return []
+    result = []
+    for host in hosts.values():
+        if not host.get("hostname"):
+            continue
+        apps = [
+            {"id": int(a["id"]) if a.get("id", "").isdigit() else 0, "name": unquote_ini(a["name"])}
+            for a in host["apps"].values()
+            if a.get("name") and a.get("hidden") != "true"
+        ]
+        result.append({"name": host["hostname"], "uuid": host.get("uuid", ""), "apps": apps})
+    return result
+
+
+def unquote_ini(value):
+    """QSettings quotes values with leading/trailing spaces; keep the spaces."""
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        return value[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+    return value
+
+
+# Moonlight's output while a `stream` launch connects.
+STREAM_CONNECTING = "Starting RTSP handshake"
+STREAM_STARTED = re.compile(r"Video stream is \d+x\d+")
+STREAM_FAILED = re.compile(r"Qt Critical:")
+# Longest the loading screen waits for video before showing Moonlight anyway.
+STREAM_WAIT = 45
+
+
+class LoadingHold:
+    """Closes the loading screen once every reason to keep it up has gone,
+    e.g. the network settling and the stream starting."""
+
+    def __init__(self, loading, reasons):
+        self.loading = loading
+        # Each reason's latest loading-screen text ("" keeps the current one).
+        self.reasons = dict.fromkeys(reasons, "")
+        self.lock = threading.Lock()
+
+    def status(self, reason, text):
+        with self.lock:
+            if reason not in self.reasons:
+                return
+            self.reasons[reason] = text
+        write_file(LOADING_STATUS, text)
+
+    def release(self, reason):
+        with self.lock:
+            if reason not in self.reasons:
+                return  # already released (e.g. video started, then Moonlight exited)
+            del self.reasons[reason]
+            remaining = [text for text in self.reasons.values() if text]
+            if self.reasons:
+                if remaining:
+                    write_file(LOADING_STATUS, remaining[-1])
+                return
+        write_file(LOADING_STATUS, "")
+        close_loading_screen(self.loading)
 
 
 def plugged_in():
@@ -1795,14 +1890,44 @@ def steam_game_running(appid):
     return False
 
 
-def run_direct(pending, background_steam=False):
+def watch_stream(proc, hold, stream, started):
+    """Follow Moonlight's output during a `stream` launch: pass it through to
+    the journal, and keep the loading screen up until video starts."""
+    host, app = stream.get("host", "the host"), stream.get("app", "").strip() or "the stream"
+    hold.status("stream", f"Connecting to {host}…")
+    timer = threading.Timer(STREAM_WAIT, hold.release, ["stream"])
+    timer.daemon = True
+    timer.start()
+    for line in proc.stdout:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        if STREAM_CONNECTING in line:
+            hold.status("stream", f"Starting {app}…")
+        elif STREAM_STARTED.search(line):
+            log(f"stream started {time.monotonic() - started:.1f}s after launch")
+            hold.release("stream")
+        elif STREAM_FAILED.search(line):
+            # Moonlight shows its own error; let it be seen.
+            log(f"stream failed: {line.strip()}")
+            hold.release("stream")
+    timer.cancel()
+    hold.release("stream")
+
+
+def run_direct(pending, background_steam=False, hold=None):
     cwd = pending.get("cwd")
     if cwd and not os.path.isdir(cwd):
         log(f"start dir {cwd!r} missing, using home")
         cwd = None
     log(f"exec: {pending['command']}")
     started = time.monotonic()
-    proc = subprocess.Popen(["bash", "-c", pending["command"]], cwd=cwd or HOME)
+    watch = hold is not None and pending.get("stream")
+    output = (
+        {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT, "text": True, "errors": "replace"} if watch else {}
+    )
+    proc = subprocess.Popen(["bash", "-c", pending["command"]], cwd=cwd or HOME, **output)
+    if watch:
+        threading.Thread(target=watch_stream, args=(proc, hold, pending["stream"], started), daemon=True).start()
     if background_steam:
         # Give the app a head start on CPU and disk before Steam's heavy startup.
         time.sleep(HYBRID_STEAM_DELAY)
@@ -1954,8 +2079,15 @@ def launch():
         else:
             log("iwd handles roaming itself, not locking the access point")
     expect_restart = starts_steam and wpa
-    # Hold the loading screen over the app until the network has settled.
-    hold_loading = bool(loading) and (expect_restart or bool(locked))
+    # Hold the loading screen over the app until the network has settled
+    # and, for a direct-to-stream launch, until video is on screen.
+    hold_reasons = []
+    if expect_restart or locked:
+        hold_reasons.append("network")
+    if pending.get("stream") and pending.get("mode") in ("direct", "hybrid"):
+        hold_reasons.append("stream")
+    hold = LoadingHold(loading, hold_reasons) if loading and hold_reasons else None
+    hold_loading = hold is not None
 
     script = bool(
         (pending.get("force_fullscreen") or loading or hybrid)
@@ -1993,14 +2125,14 @@ def launch():
     combo = BrightnessCombo(osd, keeper)
     combo.start()
     returning = pending.get("return_to_gaming")
-    if hold_loading:
+    if hold and "network" in hold.reasons:
         # Desktop Steam restarts NetworkManager (wpa_supplicant); otherwise
         # reconnect once ourselves so the access point lock applies.
-        NetworkGate(loading, expect_restart=expect_restart, reconnect=None if expect_restart else locked).start()
+        NetworkGate(hold, expect_restart=expect_restart, reconnect=None if expect_restart else locked).start()
     try:
         log(f"launching {time.monotonic() - started:.1f}s after start")
         if pending.get("mode") in ("direct", "hybrid"):
-            run_direct(pending, background_steam=pending.get("mode") == "hybrid")
+            run_direct(pending, background_steam=pending.get("mode") == "hybrid", hold=hold)
         else:
             # Steam's game process appearing is the fallback signal when the
             # KWin script couldn't load.
@@ -2147,6 +2279,9 @@ def main(argv):
         return 0
     if command == "--diagnostics":
         print(diagnostics())
+        return 0
+    if command == "--moonlight-hosts":
+        print(json.dumps(moonlight_hosts()))
         return 0
     if command == "--moonlight-settings":
         current = read_ini_section(moonlight_conf()) or {}
