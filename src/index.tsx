@@ -325,17 +325,6 @@ function Content() {
         </PanelSection>
       )}
 
-      <PanelSection title="Moonlight">
-        {moonlight.map(row)}
-        {moonlight.length === 0 && (
-          <PanelSectionRow>
-            <div style={{ opacity: 0.6, fontSize: "0.85em" }}>
-              Add Moonlight as a non-Steam game to launch it here. Other apps are in search below.
-            </div>
-          </PanelSectionRow>
-        )}
-      </PanelSection>
-
       {/* Moonlight's saved hosts: straight into a host app, skipping Moonlight's menus. */}
       {hosts
         .filter((h) => h.apps.length > 0)
@@ -354,6 +343,18 @@ function Content() {
             ))}
           </PanelSection>
         ))}
+
+      {/* Moonlight itself, for its menus (hosts, settings, pairing). */}
+      <PanelSection title="Moonlight">
+        {moonlight.map(row)}
+        {moonlight.length === 0 && (
+          <PanelSectionRow>
+            <div style={{ opacity: 0.6, fontSize: "0.85em" }}>
+              Add Moonlight as a non-Steam game to launch it here. Other apps are in search below.
+            </div>
+          </PanelSectionRow>
+        )}
+      </PanelSection>
 
       <PanelSection title="Other apps">
         <PanelSectionRow>
