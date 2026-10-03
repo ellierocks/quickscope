@@ -471,12 +471,14 @@ class Moonlight(LauncherTestCase):
         with open(self.conf) as f:
             self.assertEqual(f.read(), MOONLIGHT_CONF)
 
-    def test_changes_made_in_moonlight_are_kept(self):
+    def test_overridden_keys_ignore_changes_made_in_moonlight(self):
         self.l.override_moonlight(self.pending)
-        self.l.write_ini_values(self.conf, {"vsync": "true", "bitrate": "60000"})
+        # Changed in Moonlight during the session: one overridden key, one not.
+        self.l.write_ini_values(self.conf, {"bitrate": "23000", "mdns": "false"})
         self.l.restore(reload=False)
         values = self.conf_values()
-        self.assertEqual((values["width"], values["vsync"], values["bitrate"]), ("1280", "true", "60000"))
+        self.assertEqual((values["width"], values["bitrate"]), ("1280", "150000"))
+        self.assertEqual(values["mdns"], "false")
         # Not in the original file, so restoring removes it again.
         self.assertNotIn("hdr", values)
 

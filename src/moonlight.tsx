@@ -105,6 +105,9 @@ function ProfileEditor({
   if (!codecs.some((c) => c.data === codec)) codec = 0;
   const vrr = fork && vrrCapable && (profile.vrr ?? bool(current?.vrr, false));
   const vrrChoices = vrr && native ? vrrRates(native.fps) : null;
+  // Every edit saves every field shown, so Moonlight follows all of them.
+  const change = (patch: Partial<MoonlightProfile>) =>
+    onChange({ ...profile, bitrate, hdr, codec, ...(fork && vrrCapable ? { vrr } : {}), ...patch });
   const resolutions = [...RESOLUTIONS];
   const extra: [number, number][] = [[profile.width, profile.height]];
   if (native) extra.push([native.width, native.height]);
@@ -143,7 +146,7 @@ function ProfileEditor({
         selectedOption={`${profile.width}x${profile.height}`}
         onChange={(o) => {
           const [width, height] = String(o.data).split("x").map(Number);
-          onChange({ ...profile, width, height });
+          change({ width, height });
         }}
       />
       {fork && vrrCapable && (
@@ -152,8 +155,7 @@ function ProfileEditor({
           description="Variable refresh rate (Nonary's Moonlight fork). Needs V-Sync, and adds VRR frame rates below."
           checked={vrr}
           onChange={(on) =>
-            onChange({
-              ...profile,
+            change({
               vrr: on,
               vsync: on || profile.vsync,
               // Start on the fork's recommended VRR rate.
@@ -166,13 +168,13 @@ function ProfileEditor({
         label="Frame rate"
         rgOptions={rates.map((fps) => ({ data: fps, label: rateLabel(fps) }))}
         selectedOption={profile.fps}
-        onChange={(o) => onChange({ ...profile, fps: Number(o.data) })}
+        onChange={(o) => change({ fps: Number(o.data) })}
       />
       <DropdownItem
         label="Video codec"
         rgOptions={codecs}
         selectedOption={codec}
-        onChange={(o) => onChange({ ...profile, codec: Number(o.data) })}
+        onChange={(o) => change({ codec: Number(o.data) })}
       />
       <SliderField
         label="Bitrate"
@@ -182,25 +184,25 @@ function ProfileEditor({
         step={5}
         showValue
         valueSuffix=" Mbps"
-        onChange={(mbps) => onChange({ ...profile, bitrate: mbps * 1000 })}
+        onChange={(mbps) => change({ bitrate: mbps * 1000 })}
       />
       <ToggleField
         label="V-Sync"
         description={vrr ? "Always on with VRR." : undefined}
         disabled={vrr}
         checked={profile.vsync || vrr}
-        onChange={(vsync) => onChange({ ...profile, vsync })}
+        onChange={(vsync) => change({ vsync })}
       />
       <ToggleField
         label="Frame pacing"
         checked={profile.framepacing}
-        onChange={(framepacing) => onChange({ ...profile, framepacing })}
+        onChange={(framepacing) => change({ framepacing })}
       />
       <ToggleField
         label="HDR"
         description="Streams in HDR when the host and display support it. For the display itself, see Quickscope's display settings."
         checked={hdr}
-        onChange={(on) => onChange({ ...profile, hdr: on })}
+        onChange={(on) => change({ hdr: on })}
       />
     </>
   );
@@ -216,6 +218,28 @@ function MoonlightPage() {
     getDisplays().then(setDisplay);
     getMoonlightSettings().then(setCurrent);
   }, []);
+
+  // Profiles made before bitrate, HDR and codec existed: fill those in from
+  // Moonlight's current values, as the page shows them, so Moonlight follows
+  // every setting here rather than its own for some.
+  useEffect(() => {
+    if (!settings || !current) return;
+    const profiles = settings.moonlight_profiles;
+    const incomplete = Object.keys(profiles).filter(
+      (id) => profiles[id].bitrate === undefined || profiles[id].hdr === undefined || profiles[id].codec === undefined,
+    );
+    if (incomplete.length === 0) return;
+    const next = { ...profiles };
+    for (const id of incomplete) {
+      next[id] = {
+        ...next[id],
+        bitrate: next[id].bitrate ?? num(current.bitrate, DEFAULT_BITRATE),
+        hdr: next[id].hdr ?? bool(current.hdr, false),
+        codec: next[id].codec ?? num(current.codec, 0),
+      };
+    }
+    setSetting("moonlight_profiles", next).then(setSettings);
+  }, [settings, current]);
 
   if (!settings) return null;
 
@@ -244,7 +268,7 @@ function MoonlightPage() {
           <DialogControlsSectionHeader>Moonlight</DialogControlsSectionHeader>
           <ToggleField
             label="Override Moonlight settings"
-            description="Use the settings below for the display Moonlight runs on, instead of Moonlight's own. Your Moonlight settings are put back when you return; anything you change in Moonlight meanwhile is kept."
+            description="Moonlight uses the settings below for the display it runs on, instead of its own. Change them here, not in Moonlight: changes made in Moonlight to these settings are dropped when you return, and your own Moonlight settings are put back. Other Moonlight settings aren't touched."
             checked={settings.moonlight_override}
             onChange={setOverride}
           />

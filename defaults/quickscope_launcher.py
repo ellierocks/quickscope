@@ -1106,16 +1106,14 @@ def override_moonlight(pending):
 
 
 def restore_moonlight(entry):
-    """Put back only keys still holding what Quickscope set: anything changed
-    in Moonlight during the session is the user's and stays."""
-    current = read_ini_section(entry["path"])
-    if current is None:
+    """Put Moonlight's own values back for every overridden key. With the
+    override on, the profile is what Moonlight uses, so changes made to those
+    keys in Moonlight during the session don't carry over. Other keys are
+    never touched."""
+    if read_ini_section(entry["path"]) is None:
         return
-    back = {k: entry["original"][k] for k, v in entry["set"].items() if current.get(k) == v}
-    kept = sorted(set(entry["set"]) - set(back))
-    if back:
-        write_ini_values(entry["path"], back)
-    log(f"restored Moonlight settings {sorted(back)}" + (f", kept your changes to {kept}" if kept else ""))
+    write_ini_values(entry["path"], entry["original"])
+    log(f"restored Moonlight settings {sorted(entry['original'])}")
 
 
 def plugged_in():
