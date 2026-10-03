@@ -36,6 +36,19 @@ Moonlight's own end-of-stream statistics ("Global video stats"), taken from the 
 - Moonlight's statistics stop when the frame is handed to the compositor. Anything after that, before the panel lights up, isn't included. Only an end-to-end measurement, such as a high-speed camera, captures that.
 - Frame rates differ between runs because the game's own frame rate varied with the scene.
 
+## Power profiles
+
+Measured later the same day, PyroWave at the same Moonlight settings. "Chip power" is the APU's own reading (`power1_input` of the `amdgpu` hwmon), averaged over 10–20 s mid-stream, so it doesn't depend on whether the Deck is charging.
+
+| Profile | Stream | Render | Decode | FPS | Dropped (pacing) | Chip power |
+|---|---|---:|---:|---:|---:|---:|
+| High performance | the four Quickscope PyroWave streams below | 0.51 ms | 0.63 ms | 51.3 | 0.24% | 8.5 W |
+| Battery saver | 234 s, menus then about a minute of gameplay | 0.50 ms | 0.71 ms | 47.2 | 0.05% | 5.1 W |
+
+With the same stream running, switching profiles live gave 8.5 W (High performance), 7.8 W (SteamOS defaults), 4.8 W (Battery saver) and 5.2 W (Battery saver plus a 6 W TDP limit). Nearly all of the saving comes from turning off CPU boost: with it on, the CPU idles around 3 GHz although Moonlight barely uses it. The TDP limit added nothing.
+
+The battery saver's power reading was taken early in the stream, before the gameplay section. Render time didn't change and decode time rose by about 0.08 ms, which is negligible.
+
 ## Every stream
 
 | Time | Codec | Environment | Length | Render | Decode | FPS |

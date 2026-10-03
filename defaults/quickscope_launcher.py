@@ -55,6 +55,20 @@ HYBRID_STEAM_DELAY = 1
 STEAM_SHUTDOWN_TIMEOUT = 8
 KEEPER_INTERVAL = 2
 
+# steamosctl (get, set) commands for each power setting.
+POWER_SETTINGS = {
+    "gpu": ("get-gpu-performance-level", "set-gpu-performance-level"),
+    "governor": ("get-cpu-scaling-governor", "set-cpu-scaling-governor"),
+    "boost": ("get-cpu-boost-state", "set-cpu-boost-state"),
+}
+# Measured streaming over Moonlight (APU power): SteamOS defaults 7.8 W,
+# performance 8.5 W, battery saver 4.8 W. CPU boost is most of the difference;
+# a TDP limit saved nothing more, the stream already draws under 6 W.
+POWER_PROFILES = {
+    "performance": {"gpu": "high", "governor": "performance", "boost": "enabled"},
+    "battery": {"gpu": "auto", "governor": "powersave", "boost": "disabled"},
+}
+
 # Steam's brightness slider drives the backlight through roughly this curve
 # (measured on a Deck LCD: 48% -> 26% of the backlight's range, 100% -> max).
 BRIGHTNESS_EXPONENT = 1.84
@@ -374,9 +388,9 @@ class SessionKeeper(threading.Thread):
     runs: desktop Steam puts the GPU performance level back to auto when it
     starts, and KDE's power management changes the brightness."""
 
-    def __init__(self, pin_gpu, brightness_raw, hold_brightness_for=None):
+    def __init__(self, power, brightness_raw, hold_brightness_for=None):
         super().__init__(daemon=True)
-        self.pin_gpu = pin_gpu
+        self.power = power
         self.brightness_raw = brightness_raw
         # Without the lock, only hold brightness while KDE starts up.
         self.release_at = None if hold_brightness_for is None else time.monotonic() + hold_brightness_for
@@ -386,11 +400,10 @@ class SessionKeeper(threading.Thread):
         while not self.stopped.wait(KEEPER_INTERVAL):
             if self.release_at is not None and time.monotonic() >= self.release_at:
                 self.brightness_raw = self.release_at = None
-            if self.pin_gpu:
-                level = run(["steamosctl", "get-gpu-performance-level"])
-                if succeeded(level) and level.stdout.rsplit(":", 1)[-1].strip() != "high":
-                    if succeeded(run(["steamosctl", "set-gpu-performance-level", "high"])):
-                        log(f"GPU performance level was reset to {level.stdout.rsplit(':', 1)[-1].strip()}, pinned high again")
+            for key, value in self.power.items():
+                current = get_power_setting(key)
+                if current is not None and current != value and set_power_setting(key, value):
+                    log(f"{key} was reset to {current}, set to {value} again")
             if self.brightness_raw is not None:
                 current = read_backlight()
                 if current and current[0] != self.brightness_raw and write_backlight(self.brightness_raw):
@@ -662,22 +675,31 @@ class BrightnessCombo(threading.Thread):
         self.join(timeout=1)
 
 
-def boost_performance():
-    """Pin GPU clocks high and use the performance CPU governor for the
-    session. Returns whether the GPU level was pinned (and needs keeping)."""
-    if not shutil.which("steamosctl"):
-        return False
-    before = {}
-    gpu = run(["steamosctl", "get-gpu-performance-level"])
-    governor = run(["steamosctl", "get-cpu-scaling-governor"])
-    if succeeded(gpu) and succeeded(run(["steamosctl", "set-gpu-performance-level", "high"])):
-        before["gpu"] = gpu.stdout.rsplit(":", 1)[-1].strip()
-    if succeeded(governor) and succeeded(run(["steamosctl", "set-cpu-scaling-governor", "performance"])):
-        before["governor"] = governor.stdout.rsplit(":", 1)[-1].strip()
+def get_power_setting(key):
+    result = run(["steamosctl", POWER_SETTINGS[key][0]])
+    return result.stdout.rsplit(":", 1)[-1].strip() if succeeded(result) else None
+
+
+def set_power_setting(key, value):
+    return succeeded(run(["steamosctl", POWER_SETTINGS[key][1], value]))
+
+
+def apply_power_profile(name):
+    """Apply a POWER_PROFILES entry for the session. Returns the settings that
+    took, for the keeper to hold."""
+    profile = POWER_PROFILES.get(name)
+    if not profile or not shutil.which("steamosctl"):
+        return {}
+    before, applied = {}, {}
+    for key, value in profile.items():
+        current = get_power_setting(key)
+        if current is not None and set_power_setting(key, value):
+            before[key] = current
+            applied[key] = value
     if before:
         record_undo("performance", before)
-        log(f"performance mode on (was {before})")
-    return "gpu" in before
+        log(f"{name} profile on (was {before})")
+    return applied
 
 
 # --- undo bookkeeping --------------------------------------------------------
@@ -707,10 +729,9 @@ def restore(reload=True, restart_shell=False):
     if "brightness" in undo and write_backlight(undo["brightness"]["raw"]):
         log(f"restored brightness {undo['brightness']['raw']}")
     perf = undo.get("performance", {})
-    if perf.get("gpu"):
-        run(["steamosctl", "set-gpu-performance-level", perf["gpu"]])
-    if perf.get("governor"):
-        run(["steamosctl", "set-cpu-scaling-governor", perf["governor"]])
+    for key, value in perf.items():
+        if key in POWER_SETTINGS and value:
+            set_power_setting(key, value)
     if perf:
         log(f"restored performance settings {perf}")
     remove(ONESHOT_AUTOSTART)
@@ -863,26 +884,19 @@ def prepare():
     # Every launch method either starts Steam itself (Steam games, hybrid) or
     # deliberately runs without it (direct), so desktop Steam's own autostart
     # is never wanted: it would race our Steam or grab the controller.
-    quiet = pending.get("quiet_session", True)
     hide_autostart(lambda name, entry, is_user: (
         is_steam_entry(entry)
-        or (quiet and not is_user and name in QUIET_AUTOSTART)
+        or (not is_user and name in QUIET_AUTOSTART)
     ))
 
-    # The splash waits for the Plasma panel, so with the minimal desktop it
+    # The splash waits for the Plasma panel, which the session skips, so it
     # would sit there until it times out.
-    if pending.get("skip_splash") or pending.get("minimal_desktop"):
-        disable_splash()
+    disable_splash()
 
     choose_brightness(pending)
 
-    to_mask = []
-    if pending.get("minimal_desktop"):
-        to_mask.append(PLASMASHELL_UNIT)
-    if quiet:
-        to_mask.extend(QUIET_MASKED_UNITS)
     masked = []
-    for unit in to_mask:
+    for unit in [PLASMASHELL_UNIT, *QUIET_MASKED_UNITS]:
         if succeeded(systemctl("mask", "--runtime", unit)):
             masked.append(unit)
             record_undo("masked", masked)
@@ -1132,9 +1146,8 @@ def launch():
 
     # Loading screen right away: KWin's Wayland socket exists as soon as its
     # service has started, before KWin answers on D-Bus.
-    use_loading = pending.get("loading_screen", True)
     starting = f"Starting {pending.get('name') or 'game'}…"
-    loading = show_loading_screen(starting) if use_loading else None
+    loading = show_loading_screen(starting)
 
     if wait_for_kwin():
         log(f"KWin ready after {time.monotonic() - started:.1f}s")
@@ -1152,25 +1165,22 @@ def launch():
         timer.daemon = True
         timer.start()
 
-    pin_gpu = boost_performance() if pending.get("performance", True) else False
+    power = apply_power_profile(pending.get("power_profile", "performance"))
     keeper = None
-    if pin_gpu or brightness_raw is not None:
+    if power or brightness_raw is not None:
         hold_for = None if pending.get("lock_brightness") else BRIGHTNESS_SETTLE_TIME
-        keeper = SessionKeeper(pin_gpu, brightness_raw, hold_for)
+        keeper = SessionKeeper(power, brightness_raw, hold_for)
         keeper.start()
-    # Plasma's panel normally draws the volume indicator.
-    want_volume = pending.get("volume_osd", True) and pending.get("minimal_desktop")
-    want_combo = pending.get("brightness_combo", True)
-    osd = Osd() if want_volume or want_combo else None
-    if osd and not osd.start():
+    # Plasma's panel, which the session skips, normally draws the volume
+    # indicator; brightness has no control at all outside Gaming Mode.
+    osd = Osd()
+    if not osd.start():
         osd = None
-    volume = VolumeWatcher(osd) if osd and want_volume else None
+    volume = VolumeWatcher(osd) if osd else None
     if volume and not volume.start():
         volume = None
-    combo = None
-    if want_combo:
-        combo = BrightnessCombo(osd, keeper)
-        combo.start()
+    combo = BrightnessCombo(osd, keeper)
+    combo.start()
     returning = pending.get("return_to_gaming")
     try:
         log(f"launching {time.monotonic() - started:.1f}s after start")
@@ -1184,12 +1194,11 @@ def launch():
         log(f"launch failed: {e!r}")
     finally:
         close_loading_screen(loading)
-        if returning and use_loading:
+        if returning:
             # Covers the clean-up and logout; the logout closes it.
             show_loading_screen("Returning to Gaming Mode…")
         steam_shutdown = request_steam_shutdown() if returning else None
-        if combo:
-            combo.stop()
+        combo.stop()
         if volume:
             volume.stop()
         if osd:

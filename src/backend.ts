@@ -3,18 +3,15 @@ import { callable } from "@decky/api";
 export interface Settings {
   return_to_gaming: boolean;
   force_fullscreen: boolean;
-  skip_splash: boolean;
-  minimal_desktop: boolean;
-  loading_screen: boolean;
-  performance: boolean;
+  power_profile: PowerProfile;
   lock_brightness: boolean;
   match_gaming_brightness: boolean;
   brightness_pct: number;
-  volume_osd: boolean;
-  brightness_combo: boolean;
   favorites: number[];
   launch_modes: Record<string, ShortcutMode>;
 }
+
+export type PowerProfile = "performance" | "battery";
 
 /** How a launch actually runs. "steam" is only used for Steam games. */
 export type LaunchMode = "steam" | "hybrid" | "direct";

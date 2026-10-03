@@ -90,10 +90,19 @@ class PrepareLaunch(unittest.TestCase):
         asyncio.run(self.plugin.set_setting("launch_modes", {"1": "direct", "2": "steam", "3": "bogus"}))
         self.assertEqual(self.plugin.settings["launch_modes"], {"1": "direct"})
 
-    def test_performance_setting_reaches_the_launch(self):
-        self.assertTrue(self.stage(SHORTCUT)[1]["performance"])
-        asyncio.run(self.plugin.set_setting("performance", False))
-        self.assertFalse(self.stage(SHORTCUT)[1]["performance"])
+    def test_power_profile_reaches_the_launch(self):
+        self.assertEqual(self.stage(SHORTCUT)[1]["power_profile"], "performance")
+        asyncio.run(self.plugin.set_setting("power_profile", "battery"))
+        self.assertEqual(self.stage(SHORTCUT)[1]["power_profile"], "battery")
+        with self.assertRaises(ValueError):
+            asyncio.run(self.plugin.set_setting("power_profile", "turbo"))
+
+    def test_old_performance_toggle_migrates(self):
+        with open(self.plugin._settings_path(), "w") as f:
+            json.dump({"performance": False}, f)
+        self.plugin._load_settings()
+        self.assertEqual(self.plugin.settings["power_profile"], "battery")
+        self.assertNotIn("performance", self.plugin.settings)
 
     def test_settings_migration(self):
         with open(self.plugin._settings_path(), "w") as f:

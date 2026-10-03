@@ -26,7 +26,8 @@ Moonlight's own statistics, streaming *Batman: Arkham Knight* from [Vibeshine](h
 - **One button press** from the Quick Access menu (pinned and recent apps, search) or from a game's library page
 - **Fast startup:** the app launches the moment the compositor is up, with a loading screen instead of a black screen
 - **Your controller layout** keeps working through Steam's desktop layout
-- **A quiet session:** no Plasma panel, splash screen or KDE background helpers, and GPU/CPU kept at full speed
+- **A quiet session:** no Plasma panel, splash screen or KDE background helpers, with a high performance or battery saver profile
+- **Brightness and volume controls** in place of the Quick Access menu
 - **Leaves no trace:** every change is session-only and undone on exit. Your own apps, services and app settings are never touched.
 
 ## Install
@@ -71,14 +72,14 @@ Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quicksc
 |---|---|
 | Return to Gaming Mode on exit | On |
 | Force fullscreen | On |
-| Loading screen | On |
-| Skip splash screen | On |
-| Minimal desktop (no Plasma panel) | On |
-| Performance mode (GPU/CPU at full speed; uses more battery) | On |
+| Power profile (Battery saver uses about half the chip power while streaming) | High performance |
 | Starting brightness | Matches Gaming Mode; or a fixed level |
-| Brightness shortcut (hold Steam + push the left stick up or down; there's no Quick Access menu outside Gaming Mode) | On |
-| Lock brightness (stops KDE's power management changing it; the shortcut still works) | On |
-| Volume indicator (replaces the one the minimal desktop skips) | On |
+| Lock brightness (stops KDE's power management changing it) | On |
+
+There's no Quick Access menu outside Gaming Mode, so Quickscope adds its own controls:
+
+- **Brightness:** hold **Steam** and push the **left stick** up or down.
+- **Volume:** the volume buttons work as usual, with an on-screen indicator.
 
 ## Troubleshooting
 
@@ -104,8 +105,8 @@ Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quicksc
 | No splash screen | `Engine=none` in `~/.config/ksplashrc` (KDE's own switch), restored afterwards |
 | No Plasma panel | `systemctl --user mask --runtime plasma-plasmashell.service` |
 | Brightness | Writes the backlight (`/sys/class/backlight/*/brightness`) and re-applies it if KDE changes it (for the whole session with the lock, otherwise while the desktop starts); the original level is restored afterwards |
-| Brightness shortcut *(setting)* | Reads the built-in controller's hidraw reports without grabbing them, so Steam and the app still get every input |
-| Performance mode *(setting)* | `steamosctl set-gpu-performance-level high` (re-applied while running) and `set-cpu-scaling-governor performance` |
+| Brightness shortcut | Reads the built-in controller's hidraw reports without grabbing them, so Steam and the app still get every input |
+| Power profile *(setting)* | High performance: GPU level `high`, `performance` governor. Battery saver: GPU `auto`, `powersave` governor, CPU boost off. Set with `steamosctl`, re-applied while running, restored afterwards |
 
 Everything lives in `~/.config` or `/run`, never in files a SteamOS update replaces. If Quickscope had to create `ksplashrc`, it deletes it again afterwards.
 

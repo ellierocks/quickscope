@@ -1,6 +1,7 @@
 import {
   ButtonItem,
   DialogButton,
+  DropdownItem,
   PanelSection,
   PanelSectionRow,
   SliderField,
@@ -14,6 +15,7 @@ import { FaCrosshairs } from "react-icons/fa";
 
 import {
   Environment,
+  PowerProfile,
   Settings,
   cancelPending,
   getEnvironment,
@@ -24,6 +26,19 @@ import { patchGamePage } from "./gamepage";
 import { addLaunchingRoute } from "./launching";
 import { MODE_NAMES, effectiveMode, launch, toast } from "./launch";
 import { LibraryApp, getLibraryApps, getSteamBrightness } from "./library";
+
+const POWER_PROFILES: { data: PowerProfile; label: string; description: string }[] = [
+  {
+    data: "performance",
+    label: "High performance",
+    description: "GPU and CPU at full speed while the app runs.",
+  },
+  {
+    data: "battery",
+    label: "Battery saver",
+    description: "Turns off CPU boost. Uses about half the chip power while streaming.",
+  },
+];
 
 const RECENT_COUNT = 8;
 const SEARCH_COUNT = 20;
@@ -201,43 +216,18 @@ function Content() {
             onChange={(v) => update("force_fullscreen", v)}
           />
         </PanelSectionRow>
-      </PanelSection>
-
-      <PanelSection title="Faster startup">
         <PanelSectionRow>
-          <ToggleField
-            label="Loading screen"
-            description="Show a loading screen instead of a black screen until the app's window appears."
-            checked={settings.loading_screen}
-            onChange={(v) => update("loading_screen", v)}
-          />
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ToggleField
-            label="Skip splash screen"
-            checked={settings.skip_splash}
-            onChange={(v) => update("skip_splash", v)}
-          />
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ToggleField
-            label="Minimal desktop"
-            description="Skip the Plasma panel and desktop entirely. Only KWin and your app run."
-            checked={settings.minimal_desktop}
-            onChange={(v) => update("minimal_desktop", v)}
-          />
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ToggleField
-            label="Performance mode"
-            description="Keep GPU and CPU at full speed while the app runs. Uses more battery."
-            checked={settings.performance}
-            onChange={(v) => update("performance", v)}
+          <DropdownItem
+            label="Power profile"
+            description={POWER_PROFILES.find((p) => p.data === settings.power_profile)?.description}
+            rgOptions={POWER_PROFILES.map(({ data, label }) => ({ data, label }))}
+            selectedOption={settings.power_profile}
+            onChange={(o) => update("power_profile", o.data)}
           />
         </PanelSectionRow>
       </PanelSection>
 
-      <PanelSection title="Display & audio">
+      <PanelSection title="Brightness">
         <PanelSectionRow>
           <ToggleField
             label="Match Gaming Mode brightness"
@@ -268,26 +258,10 @@ function Content() {
         )}
         <PanelSectionRow>
           <ToggleField
-            label="Brightness shortcut"
-            description="Hold Steam and push the left stick up or down to change the brightness while the app runs."
-            checked={settings.brightness_combo}
-            onChange={(v) => update("brightness_combo", v)}
-          />
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ToggleField
             label="Lock brightness"
-            description="Stop the desktop's power management from dimming or changing the screen. The shortcut still works."
+            description="Stop the desktop's power management from dimming or changing the screen. To change the brightness while an app runs, hold Steam and push the left stick up or down."
             checked={settings.lock_brightness}
             onChange={(v) => update("lock_brightness", v)}
-          />
-        </PanelSectionRow>
-        <PanelSectionRow>
-          <ToggleField
-            label="Volume indicator"
-            description="Show the volume when you press the volume buttons. Plasma's panel usually does this, but the minimal desktop skips it."
-            checked={settings.volume_osd}
-            onChange={(v) => update("volume_osd", v)}
           />
         </PanelSectionRow>
       </PanelSection>

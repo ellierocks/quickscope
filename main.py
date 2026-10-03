@@ -11,21 +11,14 @@ import decky
 SETTINGS_DEFAULTS = {
     "return_to_gaming": True,
     "force_fullscreen": True,
-    "skip_splash": True,
-    # No plasmashell (panel/desktop) in the launch session.
-    "minimal_desktop": True,
-    "loading_screen": True,
-    # GPU clocks high and the performance CPU governor; costs battery.
-    "performance": True,
+    # "performance": GPU clocks high, performance governor. "battery": GPU on
+    # auto, powersave governor, CPU boost off (about 44% less APU power).
+    "power_profile": "performance",
     # Hold the screen at one brightness for the session (there's no Quick
     # Access menu to change it): Gaming Mode's level, or brightness_pct.
     "lock_brightness": True,
     "match_gaming_brightness": True,
     "brightness_pct": 50,
-    # Our own volume indicator when the minimal desktop skips Plasma's.
-    "volume_osd": True,
-    # Steam + left stick up/down changes the brightness in the session.
-    "brightness_combo": True,
     "favorites": [],
     # Per-shortcut overrides, {"<appid>": "direct"}. Shortcuts default to
     # "hybrid" (launched directly, desktop Steam started alongside for its
@@ -36,6 +29,7 @@ SETTINGS_DEFAULTS = {
 # Always Plasma on Wayland: on X11 apps could leave fullscreen and startup was slower.
 WAYLAND_SESSION = "plasma.desktop"
 LAUNCH_MODES = ("hybrid", "direct")
+POWER_PROFILES = ("performance", "battery")
 DEFAULT_SHORTCUT_MODE = "hybrid"
 
 # Must match PENDING_MAX_AGE in quickscope_launcher.py.
@@ -220,6 +214,9 @@ class Plugin:
             with open(self._settings_path()) as f:
                 stored = json.load(f)
             self.settings = {**SETTINGS_DEFAULTS, **{k: v for k, v in stored.items() if k in SETTINGS_DEFAULTS}}
+            # Before 0.4 this was a "performance" on/off toggle.
+            if "power_profile" not in stored and stored.get("performance") is False:
+                self.settings["power_profile"] = "battery"
         except FileNotFoundError:
             self.settings = dict(SETTINGS_DEFAULTS)
         except (OSError, ValueError) as e:
@@ -228,6 +225,8 @@ class Plugin:
         # Ignore unknown per-app methods (e.g. from older versions).
         self.settings["launch_modes"] = {
             k: v for k, v in self.settings["launch_modes"].items() if v in LAUNCH_MODES}
+        if self.settings["power_profile"] not in POWER_PROFILES:
+            self.settings["power_profile"] = SETTINGS_DEFAULTS["power_profile"]
 
     def _save_settings(self):
         os.makedirs(decky.DECKY_PLUGIN_SETTINGS_DIR, exist_ok=True)
@@ -255,6 +254,8 @@ class Plugin:
             value = [int(v) for v in value]
         elif key == "launch_modes":
             value = {str(int(k)): v for k, v in value.items() if v in LAUNCH_MODES}
+        elif key == "power_profile" and value not in POWER_PROFILES:
+            raise ValueError(f"Unknown power profile: {value}")
         elif isinstance(SETTINGS_DEFAULTS[key], bool):
             value = bool(value)
         self.settings[key] = value
@@ -302,17 +303,10 @@ class Plugin:
                 "gameid": gameid,
                 "return_to_gaming": s["return_to_gaming"],
                 "force_fullscreen": s["force_fullscreen"],
-                "skip_splash": s["skip_splash"],
-                "minimal_desktop": s["minimal_desktop"],
-                "loading_screen": s["loading_screen"],
-                # Opinionated session tuning; Quickscope owns this session.
-                "quiet_session": True,
-                "performance": s["performance"],
+                "power_profile": s["power_profile"],
                 "lock_brightness": s["lock_brightness"],
                 "match_gaming_brightness": s["match_gaming_brightness"],
                 "brightness_pct": s["brightness_pct"],
-                "volume_osd": s["volume_osd"],
-                "brightness_combo": s["brightness_combo"],
             }
 
             path = _paths()["pending"]

@@ -196,7 +196,7 @@ class Brightness(LauncherTestCase):
         self.assertEqual(step(5, -1), 5)
 
     def test_unlocked_hold_releases(self):
-        keeper = self.l.SessionKeeper(False, 17011, hold_brightness_for=0)
+        keeper = self.l.SessionKeeper({}, 17011, hold_brightness_for=0)
         self.l.KEEPER_INTERVAL = 0.01
         keeper.start()
         time.sleep(0.1)
@@ -204,11 +204,44 @@ class Brightness(LauncherTestCase):
         self.assertIsNone(keeper.brightness_raw)
 
     def test_combo_step_moves_lock_target(self):
-        keeper = self.l.SessionKeeper(False, 17011)
+        keeper = self.l.SessionKeeper({}, 17011)
         combo = self.l.BrightnessCombo(None, keeper)
         combo.step(1)
         self.assertEqual(self.raw(), self.l.brightness_pct_to_raw(50, 65535))
         self.assertEqual(keeper.brightness_raw, self.raw())
+
+
+class Power(LauncherTestCase):
+    def setUp(self):
+        super().setUp()
+        # A fake steamosctl holding SteamOS's defaults.
+        self.state = {"gpu": "auto", "governor": "powersave", "boost": "enabled"}
+        commands = {cmd: (key, i) for key, cmds in self.l.POWER_SETTINGS.items() for i, cmd in enumerate(cmds)}
+
+        def fake_run(cmd):
+            key, is_set = commands[cmd[1]]
+            if is_set:
+                self.state[key] = cmd[2]
+            return subprocess.CompletedProcess(cmd, 0, f"Something: {self.state[key]}\n")
+
+        self.l.run = fake_run
+        real_which = shutil.which
+        shutil.which = lambda name: "/usr/bin/" + name
+        self.addCleanup(setattr, shutil, "which", real_which)
+
+    def test_battery_profile_applies_and_restores(self):
+        applied = self.l.apply_power_profile("battery")
+        self.assertEqual(applied, {"gpu": "auto", "governor": "powersave", "boost": "disabled"})
+        self.assertEqual(self.state["boost"], "disabled")
+        self.l.restore(reload=False)
+        self.assertEqual(self.state, {"gpu": "auto", "governor": "powersave", "boost": "enabled"})
+
+    def test_performance_profile(self):
+        self.l.apply_power_profile("performance")
+        self.assertEqual(self.state, {"gpu": "high", "governor": "performance", "boost": "enabled"})
+
+    def test_unknown_profile_does_nothing(self):
+        self.assertEqual(self.l.apply_power_profile("turbo"), {})
 
 
 class Combo(LauncherTestCase):
