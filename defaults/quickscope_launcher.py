@@ -2030,13 +2030,26 @@ def launch():
 
 
 def uninstall():
-    """Undo everything and remove every file Quickscope created."""
+    """Undo everything and remove the files Quickscope created.
+
+    Decky also runs this when installing an update over the plugin, so the log
+    and a Wi-Fi unlock that couldn't run yet are kept; the next version picks
+    them up. Everything else (this script's copy, generated files) goes."""
     restore(reload=False)
     remove(os.path.join(UNIT_DIR, f"{UNIT_TARGET}.wants", UNIT_NAME))
     remove(os.path.join(UNIT_DIR, UNIT_NAME))
     systemctl("daemon-reload")
-    # Includes this script's own copy, the log and generated files.
-    shutil.rmtree(STATE, ignore_errors=True)
+    keep = {LOG, WIFI_LOCK}
+    for path in glob.glob(os.path.join(STATE, "*")):
+        if path not in keep:
+            if os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                remove(path)
+    try:
+        os.rmdir(STATE)  # only if nothing was kept
+    except OSError:
+        pass
 
 
 def main(argv):

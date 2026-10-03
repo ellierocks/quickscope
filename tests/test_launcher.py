@@ -776,14 +776,21 @@ class LogTrim(LauncherTestCase):
 
 
 class Uninstall(LauncherTestCase):
-    def test_removes_unit_and_state(self):
+    def test_removes_unit_and_generated_files_but_keeps_the_log(self):
+        # Decky runs uninstall on updates too: the log must survive them.
         self.l.install_unit()
         self.l.write_file(self.l.LOG, "log\n")
+        self.l.write_file(self.l.KWIN_SCRIPT, "// generated\n")
+        self.l.write_file(self.l.LOADING_SCREEN, "// generated\n")
         self.l.uninstall()
         self.assertFalse(os.path.exists(os.path.join(self.l.UNIT_DIR, self.l.UNIT_NAME)))
         self.assertFalse(
             os.path.lexists(os.path.join(self.l.UNIT_DIR, f"{self.l.UNIT_TARGET}.wants", self.l.UNIT_NAME))
         )
+        self.assertEqual(sorted(os.listdir(self.l.STATE)), [os.path.basename(self.l.LOG)])
+
+    def test_nothing_left_means_no_state_folder(self):
+        self.l.uninstall()
         self.assertFalse(os.path.exists(self.l.STATE))
 
 

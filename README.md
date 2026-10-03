@@ -93,7 +93,7 @@ There's no Quick Access menu outside Gaming Mode, so Quickscope adds its own con
 - **Wi-Fi drops for a moment when the desktop starts?** That's SteamOS: with *Force WPA Supplicant Wi-Fi backend* on (Developer settings), Steam restarts NetworkManager whenever it starts, in normal Desktop Mode too. Quickscope holds its loading screen until the network is back. Turning that setting off avoids the drop entirely.
 - **No loading screen when docked?** Expected: a TV takes a few seconds to re-sync after the session switch, and the app is usually open before the picture comes back.
 - **Decky disappeared after several very short sessions in a row?** Decky's crash protection disables it when Steam's UI goes away three times within about a minute, and each Quickscope round trip closes Steam's UI twice. Restart the Deck (or `sudo systemctl start plugin_loader`) to bring it back. Normal sessions longer than a minute don't trigger it.
-- **Logs:** `~/.local/state/quickscope/launcher.log` (launch timings and every change made or undone), and Decky's log in `~/homebrew/logs/Quickscope/`.
+- **Logs:** `~/.local/state/quickscope/launcher.log` (launch timings and every change made or undone), and Decky's log in `~/homebrew/logs/Quickscope/`. The launcher log survives updates and uninstalling; delete the folder to remove it.
 - **Undo everything by hand:** `python3 ~/.local/state/quickscope/quickscope_launcher.py --restore`
 
 <details>
