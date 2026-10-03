@@ -36,19 +36,19 @@ Open Quickscope from the Quick Access menu (**⋯**):
 |---|---|
 | **A** | Launch the app outside Gamescope |
 | **X** | Pin or unpin the app |
-| **Y** | Non-Steam apps: switch between **Direct + Steam** (default) and **Direct** |
+| **Y** | Non-Steam apps: switch between **Hybrid** (default) and **Direct** |
 
 Quickscope warns you if a game is running, because leaving Gaming Mode closes it. When the app exits, you're returned to Gaming Mode.
 
 ### Controls
 
-- **Direct + Steam** (default for non-Steam apps): the app starts immediately, and desktop Steam starts in the background. About 2 s after the app's window appears, Steam takes over the controller with your **desktop layout**. Set that layout up for how you use your apps. For Moonlight, a gamepad layout with trackpad mouse and paddle clicks works well. *(Steam → Settings → Controller → Desktop Layout)*
+- **Hybrid** (default for non-Steam apps): the app starts immediately, and desktop Steam starts in the background. About 2 s after the app's window appears, Steam takes over the controller with your **desktop layout**. Set that layout up for how you use your apps. For Moonlight, a gamepad layout with trackpad mouse and paddle clicks works well. *(Steam → Settings → Controller → Desktop Layout)*
 - **Direct**: no Steam at all. The app reads the Deck's controller directly, so there are no Steam Input layouts.
 - **Steam games** can only be started by Steam, so they wait for desktop Steam to start behind the loading screen, then use their usual layout.
 
 ### Moonlight
 
-- Add Moonlight (Flatpak) as a non-Steam shortcut and leave it on **Direct + Steam**.
+- Add Moonlight (Flatpak) as a non-Steam shortcut and leave it on **Hybrid**.
 - For the session only, Quickscope turns off Moonlight's V-Sync and frame pacing so frames are shown immediately. Your settings are restored when Moonlight exits, so Gaming Mode is unaffected.
 - To jump straight into a stream, set the shortcut's launch options to `run com.moonlight_stream.Moonlight stream <host> "<app>"`. Moonlight closes itself when the stream ends, and Quickscope returns you to Gaming Mode.
 - Quit a stream with **L1 + R1 + Start + Select**.

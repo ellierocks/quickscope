@@ -63,7 +63,7 @@ const DEFAULT_SHORTCUT_MODE: ShortcutMode = "hybrid";
 
 const MODE_NAMES: Record<LaunchMode, string> = {
   steam: "Steam",
-  hybrid: "Direct + Steam",
+  hybrid: "Hybrid",
   direct: "Direct",
 };
 
@@ -144,7 +144,7 @@ function AppRow({
         onSecondaryButton={() => onTogglePin(app)}
         onSecondaryActionDescription={pinned ? "Unpin" : "Pin"}
         onOptionsButton={isShortcut ? () => onCycleMode(app) : undefined}
-        onOptionsActionDescription={isShortcut ? (label === MODE_NAMES.direct ? "Use Direct + Steam" : "Use Direct") : undefined}
+        onOptionsActionDescription={isShortcut ? (label === MODE_NAMES.direct ? "Use Hybrid" : "Use Direct") : undefined}
         style={{ padding: "8px 12px", minWidth: 0 }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
@@ -205,14 +205,18 @@ function Content() {
     update("favorites", favs.includes(app.appid) ? favs.filter((id) => id !== app.appid) : [...favs, app.appid]);
   };
 
-  // Y toggles between the default (Direct + Steam) and the Direct fallback.
+  // Y toggles between the default (Hybrid) and the Direct fallback.
   const onCycleMode = (app: LibraryApp) => {
     const modes = { ...settings.launch_modes };
     const direct = modes[app.appid] !== "direct";
     if (direct) modes[app.appid] = "direct";
     else delete modes[app.appid];
     update("launch_modes", modes);
-    toast(`${app.name}: ${direct ? "Direct, no Steam (no Steam Input layout)" : "Direct + Steam"}`);
+    toast(
+      direct
+        ? `${app.name}: Direct. No Steam, so no Steam Input layout.`
+        : `${app.name}: Hybrid. Starts right away; Steam takes over the controller with your desktop layout.`,
+    );
   };
 
   const row = (app: LibraryApp) => (
@@ -270,7 +274,7 @@ function Content() {
           </PanelSectionRow>
         )}
         <PanelSectionRow>
-          <div style={{ opacity: 0.5, fontSize: "0.75em" }}>A: launch outside Gamescope · X: pin · Y: Direct + Steam / Direct (non-Steam)</div>
+          <div style={{ opacity: 0.5, fontSize: "0.75em" }}>A: launch outside Gamescope · X: pin · Y: Hybrid / Direct (non-Steam)</div>
         </PanelSectionRow>
       </PanelSection>
 
