@@ -606,9 +606,7 @@ def run_direct(pending, background_steam=False):
     started = time.monotonic()
     proc = subprocess.Popen(["bash", "-c", pending["command"]], cwd=cwd or HOME)
     if background_steam:
-        # Give the app a head start on CPU and disk before Steam's heavy
-        # startup; Steam takes over the controller with its desktop layout
-        # once it's up.
+        # Give the app a head start on CPU and disk before Steam's heavy startup.
         time.sleep(HYBRID_STEAM_DELAY)
         start_background_steam()
     code = proc.wait()
@@ -616,15 +614,12 @@ def run_direct(pending, background_steam=False):
 
 
 def steam_command(url=None):
-    # Leaving Gaming Mode kills its Steam, so desktop Steam would otherwise
-    # treat this as an unclean shutdown and checksum its whole install first.
-    # -silent keeps Steam's main window from opening over the game.
+    # The fast-start flags skip the install checksum Steam runs after Gaming
+    # Mode's Steam is killed; -silent keeps its window from covering the game.
     wrapper = shutil.which("steam")
     if wrapper and os.path.realpath(wrapper).endswith("steam-jupiter") and os.path.exists(STEAMOS_CLIENT):
-        # SteamOS's wrapper always adds -pipewire, which on a Wayland desktop
-        # makes Steam ask for screen capture (a portal dialog every session).
-        # Its other work (first-boot cleanup, beta channel fixup) has already
-        # run by the time Gaming Mode started Steam.
+        # Bypass SteamOS's wrapper: its -pipewire flag triggers a screen-capture
+        # prompt on Wayland, and its other setup already ran in Gaming Mode.
         cmd = [STEAMOS_CLIENT, "-steamdeck", *STEAM_FAST_START_ARGS]
     elif wrapper:
         cmd = [wrapper, *STEAM_FAST_START_ARGS]
@@ -695,9 +690,7 @@ def launch():
     else:
         log("KWin never appeared on D-Bus, launching anyway")
 
-    # The loading screen goes up first: it's what you look at while
-    # everything else starts. The KWin script closes it the moment the app's
-    # own window appears.
+    # Loading screen first, so there's never a black screen.
     loading = show_loading_screen(pending.get("name") or "game") if pending.get("loading_screen", True) else None
 
     script = bool((pending.get("force_fullscreen") or loading)

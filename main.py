@@ -9,31 +9,22 @@ import time
 import decky
 
 SETTINGS_DEFAULTS = {
-    # Return to Gaming Mode once the launched app exits.
     "return_to_gaming": True,
-    # Fullscreen the app's first window via a temporary KWin script.
     "force_fullscreen": True,
-    # Skip the Plasma splash screen for the launch session.
     "skip_splash": True,
-    # Skip plasmashell (panel/desktop) entirely for the launch session.
+    # No plasmashell (panel/desktop) in the launch session.
     "minimal_desktop": True,
-    # Show a fullscreen loading screen until the app's window appears.
     "loading_screen": True,
-    # Pin GPU clocks high and use the performance CPU governor for the
-    # session. Costs battery on long sessions.
+    # GPU clocks high and the performance CPU governor; costs battery.
     "performance": True,
     "favorites": [],
-    # Per-shortcut launch method: {"<appid>": "direct"}. Shortcuts default to
-    # "hybrid": launched directly with desktop Steam started alongside, so
-    # Steam's desktop layout takes over the controller once it's up. "direct"
-    # is the fallback with no Steam at all. (Steam games always launch
-    # through Steam; nothing else can start them.)
+    # Per-shortcut overrides, {"<appid>": "direct"}. Shortcuts default to
+    # "hybrid" (launched directly, desktop Steam started alongside for its
+    # desktop controller layout); Steam games always launch through Steam.
     "launch_modes": {},
 }
 
-# Always Plasma on Wayland. Measured on the Deck it launches faster, holds
-# fullscreen reliably and shows the loading screen; on X11 the app could leave
-# fullscreen and startup was slower.
+# Always Plasma on Wayland: on X11 apps could leave fullscreen and startup was slower.
 WAYLAND_SESSION = "plasma.desktop"
 LAUNCH_MODES = ("hybrid", "direct")
 DEFAULT_SHORTCUT_MODE = "hybrid"
@@ -225,7 +216,7 @@ class Plugin:
         except (OSError, ValueError) as e:
             decky.logger.warning(f"Could not read settings, using defaults: {e}")
             self.settings = dict(SETTINGS_DEFAULTS)
-        # Drops the removed "steam" per-app method; those apps get the default.
+        # Ignore unknown per-app methods (e.g. from older versions).
         self.settings["launch_modes"] = {
             k: v for k, v in self.settings["launch_modes"].items() if v in LAUNCH_MODES}
 

@@ -1,12 +1,11 @@
 // Adds a "Quickscope" button to a game's library page, in the bottom-right
 // corner of the header art, just above the Play row.
 //
-// It can't go inside the Play row itself: that row is rendered under a MobX
-// observer class whose render is non-writable after its first call, so any
-// patch below it is lost on the next re-render. The page component above it is
-// a plain memo component and can be patched reliably, the same level other
-// Decky plugins (e.g. ProtonDB badges) use. Every step is guarded: if Steam's
-// layout changes, the button is simply not added.
+// It can't go inside the Play row: that row is rendered under a MobX observer
+// class whose render becomes non-writable after its first call, so patches
+// below it are lost on re-render. The page component above it is a plain memo
+// component and patches reliably. Every step is guarded: if Steam's layout
+// changes, the button is simply not added.
 import { routerHook } from "@decky/api";
 import { DialogButton, afterPatch, appDetailsClasses, findInReactTree, wrapReactType } from "@decky/ui";
 import { useState } from "react";
@@ -50,9 +49,7 @@ function QuickscopeButton({ overview }: { overview: any }) {
           display: "flex",
           alignItems: "center",
           gap: "8px",
-          // No custom background: Steam's own button styles swap to a light
-          // background with dark text on focus, and overriding the background
-          // left dark text on dark.
+          // No custom background, so Steam's focus colours stay readable.
         }}
       >
         <FaCrosshairs />
@@ -72,7 +69,7 @@ function injectButton(pageTree: any, overview: any) {
   );
   const children: any[] | undefined = inner?.props?.children;
   if (!children || children.some((c) => c?.key === BUTTON_KEY)) return;
-  // Right after the header: the first child that isn't the overview panel.
+  // Right after the header.
   children.splice(1, 0, <QuickscopeButton key={BUTTON_KEY} overview={overview} />);
 }
 
