@@ -145,7 +145,7 @@ function AppRow({
         onSecondaryActionDescription={pinned ? "Unpin" : "Pin"}
         onOptionsButton={isShortcut ? () => onCycleMode(app) : undefined}
         onOptionsActionDescription={isShortcut ? (label === MODE_NAMES.direct ? "Use Hybrid" : "Use Direct") : undefined}
-        style={{ padding: "8px 12px", minWidth: 0 }}
+        style={{ padding: "8px 12px", minWidth: 0, borderRadius: 0 }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
           <span style={{ flex: 1, textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -273,9 +273,6 @@ function Content() {
             <div style={{ opacity: 0.6, fontSize: "0.85em" }}>No matching apps.</div>
           </PanelSectionRow>
         )}
-        <PanelSectionRow>
-          <div style={{ opacity: 0.5, fontSize: "0.75em" }}>A: launch outside Gamescope · X: pin · Y: Hybrid / Direct (non-Steam)</div>
-        </PanelSectionRow>
       </PanelSection>
 
       <PanelSection title="Settings">
