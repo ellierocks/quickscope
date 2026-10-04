@@ -38,17 +38,17 @@ const POWER_PROFILES: { data: PowerProfile; label: string; description: string }
   {
     data: "auto",
     label: "Automatic",
-    description: "Battery saver on battery, High performance when plugged in. Switches if you plug in or unplug.",
+    description: "Battery saver on battery, High performance when plugged in.",
   },
   {
     data: "performance",
     label: "High performance",
-    description: "GPU and CPU at full speed while the app runs.",
+    description: "GPU and CPU at full speed.",
   },
   {
     data: "battery",
     label: "Battery saver",
-    description: "Turns off CPU boost. Uses about 40% less chip power while streaming.",
+    description: "CPU boost off: about 40% less power while streaming.",
   },
 ];
 
@@ -268,11 +268,7 @@ function Content() {
     if (direct) modes[app.appid] = "direct";
     else delete modes[app.appid];
     update("launch_modes", modes);
-    toast(
-      direct
-        ? `${app.name}: Direct. No Steam, so no Steam Input layout.`
-        : `${app.name}: Hybrid. Starts right away; Steam takes over the controller with your desktop layout.`,
-    );
+    toast(direct ? `${app.name}: Direct, without Steam Input.` : `${app.name}: Hybrid, with Steam's desktop layout.`);
   };
 
   const row = (app: LibraryApp) => (
@@ -341,8 +337,8 @@ function Content() {
           <PanelSectionRow>
             <div style={{ opacity: 0.6, fontSize: "0.85em" }}>
               {env.moonlight_installed
-                ? "Open Moonlight once and pair it with your PC. Its apps then show up here, to stream straight into."
-                : "Moonlight isn't installed. Get it from Discover in Desktop Mode (Flathub), pair it with your PC, and its apps show up here."}
+                ? "Pair Moonlight with your PC to see its apps here."
+                : "Install Moonlight from Discover and pair it with your PC to see its apps here."}
             </div>
           </PanelSectionRow>
         </PanelSection>
@@ -374,8 +370,8 @@ function Content() {
           <PanelSectionRow>
             <div style={{ opacity: 0.6, fontSize: "0.85em" }}>
               {env?.moonlight_installed
-                ? "To open Moonlight itself from here, add it as a non-Steam game. The stream entries above work without it."
-                : "Add Moonlight (or another app) as a non-Steam game to launch it here. Other apps are in search below."}
+                ? "Add Moonlight as a non-Steam game to open it here."
+                : "Add Moonlight as a non-Steam game to launch it here."}
             </div>
           </PanelSectionRow>
         )}
@@ -383,12 +379,7 @@ function Content() {
 
       <PanelSection title="Other apps">
         <PanelSectionRow>
-          <TextField
-            label="Search"
-            description="Any non-Steam game or installed Steam game."
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-          />
+          <TextField label="Search" value={filter} onChange={(e) => setFilter(e.target.value)} />
         </PanelSectionRow>
         {listed.map(row)}
         {filter.trim() && listed.length === 0 && (
@@ -409,7 +400,6 @@ function Content() {
         <PanelSectionRow>
           <ToggleField
             label="Force fullscreen"
-            description="Fullscreen the app's first window as soon as it opens."
             checked={settings.force_fullscreen}
             onChange={(v) => update("force_fullscreen", v)}
           />
@@ -417,7 +407,7 @@ function Content() {
         <PanelSectionRow>
           <ToggleField
             label="Reconnect dropped streams"
-            description="If a stream's connection drops, e.g. after sleep or while the host restarts its app, start it again instead of ending the session."
+            description="Start a dropped stream again, e.g. after sleep."
             checked={settings.reconnect_streams}
             onChange={(v) => update("reconnect_streams", v)}
           />
@@ -434,7 +424,7 @@ function Content() {
         <PanelSectionRow>
           <DropdownItem
             label="Sleep when idle"
-            description="After this long without touch, keyboard or mouse input. Moonlight keeps the Deck awake while streaming, unless its Keep the screen awake setting is off."
+            description="Moonlight keeps the Deck awake while streaming."
             rgOptions={idleOptions("5 minutes on battery")}
             selectedOption={settings.idle_sleep_min}
             onChange={(o) => update("idle_sleep_min", o.data)}
@@ -465,7 +455,7 @@ function Content() {
             <PanelSectionRow>
               <ToggleField
                 label="Disable Wi-Fi power saving"
-                description="Power saving makes many Wi-Fi chips add latency spikes to a stream."
+                description="Avoids latency spikes."
                 checked={settings.wifi_powersave_off}
                 onChange={(v) => update("wifi_powersave_off", v)}
               />
@@ -475,7 +465,7 @@ function Content() {
             <PanelSectionRow>
               <ToggleField
                 label="Lock Wi-Fi access point"
-                description="No roaming or background scans during a stream."
+                description="No roaming or scans while streaming."
                 checked={settings.wifi_lock_ap}
                 onChange={(v) => update("wifi_lock_ap", v)}
               />
@@ -493,8 +483,8 @@ function Content() {
                 label="Match Gaming Mode"
                 description={
                   display.external
-                    ? "Use the resolution, refresh rate and HDR setting Gaming Mode uses on this display. The Deck's screen stays off, as in Gaming Mode."
-                    : "Use the refresh rate and HDR setting Gaming Mode uses."
+                    ? "Resolution, refresh rate and HDR as in Gaming Mode. The Deck's screen stays off."
+                    : "Refresh rate and HDR as in Gaming Mode."
                 }
                 checked={!settings.display_mode}
                 onChange={(v) => update("display_mode", v ? "" : (display.current ?? display.modes[0]))}
@@ -508,7 +498,7 @@ function Content() {
                 description={
                   display.modes.includes(settings.display_mode)
                     ? undefined
-                    : "This display doesn't offer the saved mode, so Gaming Mode's is used."
+                    : "Not offered by this display, so Gaming Mode's is used."
                 }
                 rgOptions={sortModes(display.modes).map((m) => ({ data: m, label: modeLabel(m) }))}
                 selectedOption={settings.display_mode}
@@ -524,7 +514,7 @@ function Content() {
           <PanelSectionRow>
             <SliderField
               label="Scale"
-              description="Size of the app's menus and text. Moonlight streams stay at full resolution either way."
+              description="Size of menus and text. Streams stay at full resolution."
               value={settings.display_scale}
               min={100}
               max={300}
@@ -543,7 +533,6 @@ function Content() {
           <PanelSectionRow>
             <ToggleField
               label="Match Gaming Mode brightness"
-              description="Start the app at the brightness you had when launching."
               checked={settings.match_gaming_brightness}
               onChange={async (v) => {
                 // Start the slider at the current brightness.
@@ -571,7 +560,7 @@ function Content() {
           <PanelSectionRow>
             <ToggleField
               label="Lock brightness"
-              description="Stop the desktop's power management from dimming or changing the screen. To change the brightness while an app runs, hold … and push the left stick up or down."
+              description="Stops KDE changing it. Hold … and push the left stick to adjust."
               checked={settings.lock_brightness}
               onChange={(v) => update("lock_brightness", v)}
             />
@@ -583,7 +572,7 @@ function Content() {
         <PanelSectionRow>
           <ButtonItem
             layout="below"
-            description="Saves a report for bug reports to Downloads. Network names and addresses are masked."
+            description="Saves a report to Downloads, with network details masked."
             onClick={async () => {
               try {
                 toast(`Saved ${await saveDiagnostics()}`);

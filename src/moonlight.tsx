@@ -174,7 +174,7 @@ function ProfileEditor({
     <>
       <DropdownItem
         label="Resolution"
-        description="Higher than the screen supersamples: sharper, but more bandwidth and decoding work."
+        description="Above the screen's supersamples: sharper, but more bandwidth."
         rgOptions={resolutions.map(([w, h]) => ({
           data: `${w}x${h}`,
           label: `${w} × ${h}${isNative(w, h) ? " (screen)" : ""}`,
@@ -188,7 +188,7 @@ function ProfileEditor({
       {fork && vrrCapable && (
         <ToggleField
           label="VRR"
-          description="Variable refresh rate (Nonary's Moonlight fork). Needs V-Sync, and adds VRR frame rates below."
+          description="Needs V-Sync. Adds VRR frame rates below."
           checked={vrr}
           onChange={(on) =>
             change({
@@ -214,7 +214,7 @@ function ProfileEditor({
       />
       <ToggleField
         label="Automatic bitrate"
-        description={`Moonlight's own default for these settings, kept up to date as they change: ${bitrate / 1000} Mbps.`}
+        description={`Moonlight's default for these settings: ${bitrate / 1000} Mbps.`}
         checked={autoBitrate}
         onChange={(on) => change({ auto_bitrate: on })}
       />
@@ -233,7 +233,7 @@ function ProfileEditor({
       )}
       <ToggleField
         label="YUV 4:4:4"
-        description="Full colour detail, sharper for text and fine lines. Needs support from the host and the decoder, and about twice the bitrate."
+        description="Sharper text and fine lines. Needs host and decoder support, and about twice the bitrate."
         checked={yuv444}
         onChange={(on) => change({ yuv444: on })}
       />
@@ -251,19 +251,14 @@ function ProfileEditor({
       />
       <ToggleField
         label="HDR"
-        description="Streams in HDR when the host and display support it. For the display itself, see Quickscope's display settings."
+        description="When the host supports it. The display's own HDR is in Quickscope's settings."
         checked={hdr}
         onChange={(on) => change({ hdr: on })}
       />
-      <ToggleField
-        label="Performance stats"
-        description="Moonlight's statistics overlay while streaming."
-        checked={stats}
-        onChange={(on) => change({ stats: on })}
-      />
+      <ToggleField label="Performance stats" checked={stats} onChange={(on) => change({ stats: on })} />
       <ToggleField
         label="Keep the screen awake"
-        description="While streaming, the screen stays on and the Deck doesn't sleep, whatever Quickscope's idle settings say."
+        description="No sleep or screen-off while streaming."
         checked={keepAwake}
         onChange={(on) => change({ keep_awake: on })}
       />
@@ -346,7 +341,7 @@ function MoonlightPage() {
           <DialogControlsSectionHeader>Moonlight</DialogControlsSectionHeader>
           <ToggleField
             label="Override Moonlight settings"
-            description="Moonlight uses the settings below for the display it runs on, instead of its own. Change them here, not in Moonlight: changes made in Moonlight to these settings are dropped when you return, and your own Moonlight settings are put back. Other Moonlight settings aren't touched."
+            description="Moonlight uses these settings on the display it runs on. Change them here: changes made in Moonlight are undone afterwards."
             checked={settings.moonlight_override}
             onChange={setOverride}
           />
@@ -366,7 +361,7 @@ function MoonlightPage() {
             ) : (
               <ButtonItem
                 layout="below"
-                description="Moonlight uses its own settings on this display until you add some here."
+                description="Until you do, Moonlight uses its own settings here."
                 onClick={() => save({ ...profiles, [display.id]: profileFrom(display, current) })}
               >
                 Add settings for {display.name}
