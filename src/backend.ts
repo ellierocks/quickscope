@@ -122,6 +122,9 @@ export interface LaunchSpec {
   /** For "stream": Moonlight host name and app name (exact, spaces included). */
   host?: string;
   app?: string;
+  /** For "stream": the Moonlight shortcut's exe and options, used when it's an AppImage. */
+  moonlight_exe?: string;
+  moonlight_launch_options?: string;
 }
 
 export interface MoonlightApp {

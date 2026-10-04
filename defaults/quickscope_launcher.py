@@ -1577,10 +1577,35 @@ def moonlight_conf(pending=None):
     return flatpak if os.path.exists(flatpak) or not os.path.exists(native) else native
 
 
+def is_appimage(path):
+    """An AppImage, by its name or its magic bytes ("AI" and its type at offset 8)."""
+    if not os.path.isfile(path):
+        return False
+    if path.lower().endswith(".appimage"):
+        return True
+    try:
+        with open(path, "rb") as f:
+            f.seek(8)
+            return f.read(3) in (b"AI\x01", b"AI\x02")
+    except OSError:
+        return False
+
+
+def command_appimage(command):
+    """The AppImage a command runs, or None."""
+    try:
+        words = shlex.split(command or "")
+    except ValueError:
+        return None
+    return next((w for w in words if is_appimage(w)), None)
+
+
 def moonlight_binary(pending=None):
-    """The Moonlight binary that goes with moonlight_conf(), None if not found
-    (an AppImage, say)."""
+    """The Moonlight binary that goes with moonlight_conf(), None if not found.
+    An AppImage's is packed inside it, compressed, so there's none to read."""
     if moonlight_conf(pending) == os.path.join(HOME, ".config", MOONLIGHT_CONF_NAME):
+        if command_appimage((pending or {}).get("command")):
+            return None
         return shutil.which("moonlight")
     for root in FLATPAK_DIRS:
         path = os.path.join(root, "app", MOONLIGHT_FLATPAK, "current", "active", "files", "bin", "moonlight")
@@ -2947,8 +2972,11 @@ def diagnostics():
     started = run(["journalctl", "--user", "--no-pager", "-o", "cat", "-g", "Current Moonlight version"])
     versions = re.findall(r'Current Moonlight version: "([^"]+)"', started.stdout) if started else []
     conf = read_ini_section(moonlight_conf()) or {}
+    # An AppImage or a native build keeps its settings here.
+    native = os.path.exists(os.path.join(HOME, ".config", MOONLIGHT_CONF_NAME))
     lines.append(
         f"Moonlight: Flatpak {'installed' if installed else 'not installed'}, "
+        f"native/AppImage settings {'present' if native else 'absent'}, "
         f"last run {versions[-1] if versions else 'unknown'}, "
         f"Nonary's VRR fork: {'yes' if moonlight_fork(conf=conf) else 'no'}"
     )

@@ -228,7 +228,7 @@ function Content() {
   const onStream = async (host: MoonlightHost, app: MoonlightApp) => {
     setBusy(true);
     try {
-      await launchStream(host, app);
+      await launchStream(host, app, moonlight[0]);
     } catch (e) {
       toast(`Launch failed: ${e}`);
     } finally {
@@ -336,7 +336,7 @@ function Content() {
         <PanelSection title="Stream">
           <PanelSectionRow>
             <div style={{ opacity: 0.6, fontSize: "0.85em" }}>
-              {env.moonlight_installed
+              {env.moonlight_installed || moonlight.length > 0
                 ? "Pair Moonlight with your PC to see its apps here."
                 : "Install Moonlight from Discover and pair it with your PC to see its apps here."}
             </div>

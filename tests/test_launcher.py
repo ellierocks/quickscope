@@ -6,6 +6,7 @@ import io
 import json
 import os
 import pathlib
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -934,6 +935,25 @@ class Moonlight(LauncherTestCase):
         self.l.write_file(native, "[General]\nwidth=1920\n")
         self.assertEqual(self.l.moonlight_conf(), self.conf)
         self.assertEqual(self.l.moonlight_conf({"command": "/opt/moonlight/moonlight"}), native)
+
+    def test_appimage_uses_the_native_settings_and_its_own_binary(self):
+        native = os.path.join(self.home, ".config", "Moonlight Game Streaming Project", "Moonlight.conf")
+        self.l.write_file(native, "[General]\nwidth=1920\nenablevrr=false\n")
+        appimage = os.path.join(self.home, "Applications", "Moonlight-6.1.0-x86_64.AppImage")
+        self.l.write_file(appimage, "\x7fELF\x02\x01\x01\x00AI\x02 ...")
+        pending = {"command": f"'{appimage}' stream star Desktop"}
+        self.assertEqual(self.l.moonlight_conf(pending), native)
+        self.assertTrue(self.l.is_moonlight(pending))
+        # Not some other `moonlight` on the PATH: the fork is told by its settings.
+        real_which = self.l.shutil.which
+        self.addCleanup(setattr, self.l.shutil, "which", real_which)
+        self.l.shutil.which = lambda cmd: "/usr/bin/moonlight"
+        self.assertIsNone(self.l.moonlight_binary(pending))
+        self.assertTrue(self.l.moonlight_fork(pending))
+        # Renamed: still known by its magic bytes.
+        renamed = os.path.join(self.home, "Applications", "moonlight")
+        os.replace(appimage, renamed)
+        self.assertEqual(self.l.command_appimage(f"{shlex.quote(renamed)} stream star Desktop"), renamed)
 
     def test_nothing_changes_without_the_toggle_or_a_profile(self):
         for pending in (

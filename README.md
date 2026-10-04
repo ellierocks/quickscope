@@ -69,7 +69,7 @@ Open **Quickscope** from the Quick Access menu. The panel lists your pinned entr
 
 ### Moonlight
 
-- Install Moonlight from Discover and pair it with your PC. Its hosts' apps appear in the panel, read from Moonlight's saved list (open Moonlight to refresh it).
+- Install Moonlight from Discover (or add its AppImage to Steam as a non-Steam game) and pair it with your PC. Its hosts' apps appear in the panel, read from Moonlight's saved list (open Moonlight to refresh it).
 - To open Moonlight itself from the panel, add it as a non-Steam shortcut.
 - Quit a stream with **L1 + R1 + Start + Select**.
 

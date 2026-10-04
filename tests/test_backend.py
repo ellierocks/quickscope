@@ -104,6 +104,27 @@ class PrepareLaunch(unittest.TestCase):
         self.assertEqual(pending["command"], "flatpak run com.moonlight_stream.Moonlight stream star '  Resume'")
         self.assertEqual(pending["stream"], {"host": "star", "app": "  Resume"})
 
+    def test_stream_launch_runs_the_shortcuts_appimage(self):
+        # Even with the Flatpak installed: the shortcut is the Moonlight in use.
+        os.makedirs(
+            os.path.join(TMP, ".local", "share", "flatpak", "app", "com.moonlight_stream.Moonlight"), exist_ok=True
+        )
+        appimage = os.path.join(TMP, "Applications", "Moonlight-6.1.0-x86_64.AppImage")
+        os.makedirs(os.path.dirname(appimage), exist_ok=True)
+        with open(appimage, "wb") as f:
+            f.write(b"\x7fELF\x02\x01\x01\x00AI\x02")
+        spec = {"appid": 4, "name": "Resume", "kind": "stream", "host": "star", "app": "  Resume"}
+        spec.update(moonlight_exe=f'"{appimage}"', moonlight_launch_options="QT_QPA_PLATFORM=xcb %command%")
+        mode, pending = self.stage(spec)
+        self.assertEqual(mode, "hybrid")
+        self.assertEqual(pending["command"], f"QT_QPA_PLATFORM=xcb \"{appimage}\" stream star '  Resume'")
+        # A Flatpak shortcut doesn't count; the usual lookup applies.
+        real_which = main._which
+        main._which = lambda cmd: f"/usr/bin/{cmd}" if cmd == "flatpak" else None
+        self.addCleanup(setattr, main, "_which", real_which)
+        spec.update(moonlight_exe='"/usr/bin/flatpak"', moonlight_launch_options="run com.moonlight_stream.Moonlight")
+        self.assertTrue(self.stage(spec)[1]["command"].startswith("flatpak run com.moonlight_stream.Moonlight stream"))
+
     def test_pinned_streams_keep_exact_names(self):
         asyncio.run(
             self.plugin.set_setting(

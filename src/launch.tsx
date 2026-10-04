@@ -65,10 +65,19 @@ export function launch(app: LibraryApp) {
   });
 }
 
-/** Stream a host app straight away with Moonlight, skipping its menus. */
-export function launchStream(host: MoonlightHost, app: MoonlightApp) {
+/** Stream a host app straight away with Moonlight, skipping its menus. With
+ * `shortcut` (the Moonlight shortcut), an AppImage it runs is used for it. */
+export function launchStream(host: MoonlightHost, app: MoonlightApp, shortcut?: LibraryApp) {
   const name = app.name.trim();
-  return stageAndSwitch(name, async () => ({ appid: app.id, name, kind: "stream", host: host.name, app: app.name }));
+  return stageAndSwitch(name, async () => {
+    const spec: LaunchSpec = { appid: app.id, name, kind: "stream", host: host.name, app: app.name };
+    const details = shortcut && (await getShortcutDetails(shortcut.appid));
+    if (details) {
+      spec.moonlight_exe = details.exe;
+      spec.moonlight_launch_options = details.launchOptions;
+    }
+    return spec;
+  });
 }
 
 async function stageAndSwitch(name: string, buildSpec: () => Promise<LaunchSpec>) {

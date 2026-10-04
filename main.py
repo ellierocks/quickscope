@@ -153,9 +153,28 @@ async def _steamosctl_value(command):
 MOONLIGHT_FLATPAK = "com.moonlight_stream.Moonlight"
 
 
-def _moonlight_stream_command(host, app):
-    """Moonlight's `stream <host> <app>` command: the Flatpak (user or system
-    install), else a native `moonlight`. None if neither is installed."""
+def _is_appimage(path):
+    """An AppImage, by its name or its magic bytes ("AI" and its type at offset 8)."""
+    if not os.path.isfile(path):
+        return False
+    if path.lower().endswith(".appimage"):
+        return True
+    try:
+        with open(path, "rb") as f:
+            f.seek(8)
+            return f.read(3) in (b"AI\x01", b"AI\x02")
+    except OSError:
+        return False
+
+
+def _moonlight_stream_command(host, app, shortcut_exe=None, shortcut_options=None):
+    """Moonlight's `stream <host> <app>` command: the AppImage the Moonlight
+    shortcut runs, else the Flatpak (user or system install), else a native
+    `moonlight`. None if none is installed."""
+    stream = shlex.join(["stream", host, app])
+    if shortcut_exe and _is_appimage(_strip_quotes(shortcut_exe)):
+        # The shortcut's launch options too (env vars, Moonlight's own options).
+        return f"{build_direct_command(shortcut_exe, shortcut_options)} {stream}"
     flatpak_dirs = [
         os.path.join(decky.DECKY_USER_HOME, ".local", "share", "flatpak", "app", MOONLIGHT_FLATPAK),
         os.path.join("/var/lib/flatpak/app", MOONLIGHT_FLATPAK),
@@ -166,7 +185,7 @@ def _moonlight_stream_command(host, app):
         base = ["moonlight"]
     else:
         return None
-    return shlex.join([*base, "stream", host, app])
+    return f"{shlex.join(base)} {stream}"
 
 
 def _launcher_source():
@@ -482,7 +501,8 @@ class Plugin:
             "pending": os.path.exists(_paths()["pending"]),
             "wifi_backend": await _steamosctl_value("get-wifi-backend"),
             "wifi_powersave": await _steamosctl_value("get-wifi-power-management-state"),
-            # The Flatpak or a native build: what stream entries need.
+            # The Flatpak or a native build: what stream entries need. An
+            # AppImage only shows as the Moonlight shortcut, in the frontend.
             "moonlight_installed": _moonlight_stream_command("host", "app") is not None,
         }
 
@@ -502,7 +522,9 @@ class Plugin:
                 # Straight into a host app with Moonlight's `stream` command. Hybrid:
                 # desktop Steam runs alongside for the controller layout.
                 stream = {"host": str(spec["host"]), "app": str(spec["app"])}
-                command = _moonlight_stream_command(stream["host"], stream["app"])
+                command = _moonlight_stream_command(
+                    stream["host"], stream["app"], spec.get("moonlight_exe"), spec.get("moonlight_launch_options")
+                )
                 if not command:
                     return {"ok": False, "error": "Moonlight isn't installed"}
                 mode = DEFAULT_SHORTCUT_MODE
