@@ -5,6 +5,7 @@ import pwd
 import re
 import shlex
 import shutil
+import signal
 import time
 
 import decky
@@ -68,6 +69,11 @@ LAUNCH_UNIT = "quickscope-launch.service"
 GAMESCOPE_UNIT = "gamescope-session.service"
 # Normal Gamescope stops take ~1-2.2 s on the Deck; its unit's own timeout is 10 s.
 GAMESCOPE_STOP_GRACE = 3
+# Gamescope's own process is killed this long after its stop begins.
+GAMESCOPE_MAIN_GRACE = 0.3
+# Gamescope's process name (its crash dumps are "core.gamescope-wl…").
+GAMESCOPE_PROCESS_NAMES = ("gamescope-wl", "gamescope")
+SIGKILL = getattr(signal, "SIGKILL", 9)  # Linux's; absent where the tests may run
 GAMESCOPE_WATCH_TIMEOUT = 15
 
 
@@ -256,24 +262,66 @@ async def _systemctl_user(*args):
     return proc.returncode, out.decode(errors="replace").strip()
 
 
+async def _unit_processes(unit):
+    """[(pid, process name)] in a user unit's cgroup."""
+    _, cgroup = await _systemctl_user("show", "-p", "ControlGroup", "--value", unit)
+    procs = []
+    try:
+        with open(os.path.join("/sys/fs/cgroup", cgroup.strip().lstrip("/"), "cgroup.procs")) as f:
+            pids = [int(p) for p in f.read().split()]
+    except (OSError, ValueError):
+        return procs
+    for pid in pids:
+        try:
+            with open(f"/proc/{pid}/comm") as f:
+                procs.append((pid, f.read().strip()))
+        except OSError:
+            pass
+    return procs
+
+
 async def _hurry_gamescope_stop():
-    """Gamescope sometimes ignores SIGTERM while leaving Gaming Mode and sits
-    out its whole stop timeout before systemd SIGKILLs it. Send that SIGKILL
-    as soon as it's clearly stuck instead."""
+    """Get Gamescope out of the way fast when leaving Gaming Mode.
+
+    Left to stop by itself, Gamescope takes 1.1-1.4 s, often aborts and has a
+    crash dump written (~2 s), or ignores SIGTERM until killed. Its own
+    process (not Steam's: they get the usual SIGTERM and can save) is killed
+    shortly after the stop begins; if the unit still hasn't stopped after
+    GAMESCOPE_STOP_GRACE, everything left in it is."""
     loop = asyncio.get_running_loop()
     deadline = loop.time() + GAMESCOPE_WATCH_TIMEOUT
     stopping_since = None
+    killed = reported = False
     while loop.time() < deadline:
         _, state = await _systemctl_user("show", "-p", "ActiveState", "--value", GAMESCOPE_UNIT)
         if state in ("inactive", "failed"):
+            if stopping_since is not None:
+                decky.logger.info(f"{GAMESCOPE_UNIT} stopped after {loop.time() - stopping_since:.2f}s")
             return
         if state == "deactivating":
             stopping_since = stopping_since or loop.time()
-            if loop.time() - stopping_since >= GAMESCOPE_STOP_GRACE:
-                decky.logger.info(f"{GAMESCOPE_UNIT} stuck stopping; sending SIGKILL early")
+            waited = loop.time() - stopping_since
+            if not killed and waited >= GAMESCOPE_MAIN_GRACE:
+                # The unit's main process is the gamescope-session script, so
+                # find Gamescope itself among the unit's processes.
+                pids = await _unit_processes(GAMESCOPE_UNIT)
+                for pid, name in pids:
+                    if name in GAMESCOPE_PROCESS_NAMES:
+                        try:
+                            os.kill(pid, SIGKILL)
+                        except OSError:
+                            pass
+                decky.logger.info(f"stopping Gamescope; left in the session: {sorted({n for _, n in pids})}")
+                killed = True
+            if killed and not reported and waited >= 1:
+                left = sorted({n for _, n in await _unit_processes(GAMESCOPE_UNIT)})
+                decky.logger.info(f"{GAMESCOPE_UNIT} still stopping after 1 s: {left}")
+                reported = True
+            if waited >= GAMESCOPE_STOP_GRACE:
+                decky.logger.info(f"{GAMESCOPE_UNIT} stuck stopping; sending SIGKILL to what's left")
                 await _systemctl_user("kill", "--signal=SIGKILL", GAMESCOPE_UNIT)
                 return
-        await asyncio.sleep(0.25)
+        await asyncio.sleep(0.1)
 
 
 def build_direct_command(exe, launch_options):

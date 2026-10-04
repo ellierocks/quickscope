@@ -156,13 +156,32 @@ class GamescopeWatchdog(unittest.TestCase):
             main._systemctl_user, main.GAMESCOPE_STOP_GRACE = original
         return [c for c in calls if c[0] == "kill"]
 
-    def test_normal_stop_is_left_alone(self):
-        self.assertEqual(self.run_states(["active", "deactivating", "deactivating", "inactive"]), [])
+    EVERYTHING = ("kill", "--signal=SIGKILL", "gamescope-session.service")
 
-    def test_stuck_stop_is_killed_once(self):
-        self.assertEqual(
-            self.run_states(["active", "deactivating"]), [("kill", "--signal=SIGKILL", "gamescope-session.service")]
-        )
+    def setUp(self):
+        # The session's processes, and which of them got SIGKILL.
+        self.killed = []
+        real = main._unit_processes, main.os.kill
+
+        async def fake_processes(unit):
+            return [(1, "gamescope-session"), (2, "gamescope-wl"), (3, "steam")]
+
+        main._unit_processes = fake_processes
+        main.os.kill = lambda pid, sig: self.killed.append(pid)
+        self.addCleanup(lambda: (setattr(main, "_unit_processes", real[0]), setattr(main.os, "kill", real[1])))
+
+    def test_quick_stop_is_left_alone(self):
+        self.assertEqual(self.run_states(["active", "deactivating", "inactive"]), [])
+        self.assertEqual(self.killed, [])
+
+    def test_only_gamescope_itself_is_killed_soon_after_the_stop_begins(self):
+        # Steam and the rest of the session still get their SIGTERM and can save.
+        self.assertEqual(self.run_states(["active", *["deactivating"] * 5, "inactive"]), [])
+        self.assertEqual(self.killed, [2])
+
+    def test_stuck_stop_kills_whatever_is_left(self):
+        self.assertEqual(self.run_states(["active", "deactivating"]), [self.EVERYTHING])
+        self.assertEqual(self.killed, [2])
 
 
 if __name__ == "__main__":

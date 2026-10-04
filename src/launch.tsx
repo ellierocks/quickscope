@@ -12,7 +12,7 @@ import {
   prepareLaunch,
   switchSession,
 } from "./backend";
-import { hideLaunchingPage, showLaunchingPage } from "./launching";
+import { fadeLaunchingPage, hideLaunchingPage, showLaunchingPage } from "./launching";
 import { LibraryApp, getShortcutDetails, steamSwitchToDesktop } from "./library";
 
 export const DEFAULT_SHORTCUT_MODE: ShortcutMode = "hybrid";
@@ -94,6 +94,7 @@ async function stageAndSwitch(name: string, buildSpec: () => Promise<LaunchSpec>
       toast(`${name}: launching through Steam, couldn't read the shortcut`);
     }
 
+    fadeLaunchingPage();
     const switched = await switchSession();
     if (!switched.ok) {
       // Steam's own Switch to Desktop as a last resort; it picks its own session.
