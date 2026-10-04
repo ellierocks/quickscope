@@ -167,7 +167,9 @@ function Content() {
   const [filter, setFilter] = useState("");
   const [busy, setBusy] = useState(false);
   const [display, setDisplay] = useState<DisplayInfo | null>(null);
-  const [hosts, setHosts] = useState<MoonlightHost[]>([]);
+  // null until loaded, so the "no hosts yet" hint doesn't flash up.
+  const [hostList, setHosts] = useState<MoonlightHost[] | null>(null);
+  const hosts = hostList ?? [];
 
   useEffect(() => {
     getSettings().then(setSettings);
@@ -325,6 +327,19 @@ function Content() {
         </PanelSection>
       )}
 
+      {/* First run: say what's missing instead of showing nothing. */}
+      {env && hostList && !hosts.some((h) => h.apps.length > 0) && (
+        <PanelSection title="Stream">
+          <PanelSectionRow>
+            <div style={{ opacity: 0.6, fontSize: "0.85em" }}>
+              {env.moonlight_installed
+                ? "Open Moonlight once and pair it with your PC. Its apps then show up here, to stream straight into."
+                : "Moonlight isn't installed. Get it from Discover in Desktop Mode (Flathub), pair it with your PC, and its apps show up here."}
+            </div>
+          </PanelSectionRow>
+        </PanelSection>
+      )}
+
       {/* Moonlight's saved hosts: straight into a host app, skipping Moonlight's menus. */}
       {hosts
         .filter((h) => h.apps.length > 0)
@@ -350,7 +365,9 @@ function Content() {
         {moonlight.length === 0 && (
           <PanelSectionRow>
             <div style={{ opacity: 0.6, fontSize: "0.85em" }}>
-              Add Moonlight as a non-Steam game to launch it here. Other apps are in search below.
+              {env?.moonlight_installed
+                ? "To open Moonlight itself from here, add it as a non-Steam game. The stream entries above work without it."
+                : "Add Moonlight (or another app) as a non-Steam game to launch it here. Other apps are in search below."}
             </div>
           </PanelSectionRow>
         )}

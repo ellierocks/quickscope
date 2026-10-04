@@ -471,6 +471,8 @@ class Plugin:
             "pending": os.path.exists(_paths()["pending"]),
             "wifi_backend": await _steamosctl_value("get-wifi-backend"),
             "wifi_powersave": await _steamosctl_value("get-wifi-power-management-state"),
+            # The Flatpak or a native build: what stream entries need.
+            "moonlight_installed": _moonlight_stream_command("host", "app") is not None,
         }
 
     async def prepare_launch(self, spec):

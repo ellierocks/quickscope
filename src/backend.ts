@@ -38,6 +38,7 @@ export interface Environment {
   wifi_backend: string | null;
   /** Wi-Fi power management outside sessions: "enabled" or "disabled". */
   wifi_powersave: string | null;
+  moonlight_installed: boolean;
 }
 
 export interface DisplayInfo {
