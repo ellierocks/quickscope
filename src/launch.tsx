@@ -18,7 +18,9 @@ import { LibraryApp, getShortcutDetails, steamSwitchToDesktop } from "./library"
 export const DEFAULT_SHORTCUT_MODE: ShortcutMode = "hybrid";
 
 export const MODE_NAMES: Record<LaunchMode, string> = {
-  steam: "Steam",
+  // Desktop Steam has to start first: about 13 s, so mostly for a game that
+  // misbehaves under Gamescope.
+  steam: "Steam · slower",
   hybrid: "Hybrid",
   direct: "Direct",
 };
