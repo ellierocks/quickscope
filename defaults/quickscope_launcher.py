@@ -26,7 +26,9 @@ Standard library only: this runs on the system Python, not Decky's.
 """
 
 import glob
+import http.server
 import json
+import math
 import os
 import platform
 import re
@@ -48,7 +50,8 @@ KWIN_SCRIPT = os.path.join(STATE, "session.js")
 OSD_SCREEN = os.path.join(STATE, "osd.qml")
 BACKLIGHT_ROOT = "/sys/class/backlight"
 SYSFS_ROOT = "/sys"
-OSD_STATE = os.path.join(STATE, "osd.json")
+# The overlay's request waits at most this long for something to show.
+OSD_POLL_TIMEOUT = 300
 LOADING_SCREEN = os.path.join(STATE, "loading.qml")
 LOADING_STATUS = os.path.join(STATE, "loading.txt")
 # Kept apart from undo.json: unlocking needs the desktop session's permissions,
@@ -72,6 +75,7 @@ HYBRID_STEAM_DELAY = 1
 # How long to wait for desktop Steam to exit cleanly before returning anyway.
 STEAM_SHUTDOWN_TIMEOUT = 8
 KEEPER_INTERVAL = 2
+WIFI_RECHECK_INTERVAL = 30
 
 # steamosctl (get, set) commands for each power setting.
 POWER_SETTINGS = {
@@ -394,8 +398,9 @@ Window {
 OSD_TITLE = "Quickscope OSD"
 # On-screen indicator for volume and brightness. Drawn as a layer-shell overlay
 # (QT_WAYLAND_SHELL_INTEGRATION=layer-shell) so it shows above fullscreen apps
-# without taking focus; the launcher writes what to show to a small JSON file
-# that this polls.
+# without taking focus. It asks the launcher's local server what to show, and
+# the server answers only once there's something new (a long poll): polling a
+# file 10 times a second woke it all session for about 0.5% of a core.
 OSD_QML = """\
 import QtQuick
 import org.kde.layershell 1.0 as LayerShell
@@ -461,26 +466,33 @@ Window {
     }
 
     Timer { id: hide; interval: 1500; onTriggered: osd.visible = false }
-    Timer {
-        interval: 100
-        running: true
-        repeat: true
-        onTriggered: {
+    Timer { id: retry; interval: 1000; onTriggered: osd.poll() }
+
+    function poll() {
+        var xhr = new XMLHttpRequest();
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState !== XMLHttpRequest.DONE) return;
             try {
-                var xhr = new XMLHttpRequest();
-                xhr.open("GET", %(state_url)s, false);
-                xhr.send();
                 var s = JSON.parse(xhr.responseText);
-                if (s.seq === osd.seq) return;
+            } catch (e) {
+                retry.start();
+                return;
+            }
+            if (s.seq !== osd.seq) {
                 osd.seq = s.seq;
                 osd.label = s.label;
                 osd.level = s.level;
                 osd.valueText = s.text;
                 osd.visible = true;
                 hide.restart();
-            } catch (e) {}
-        }
+            }
+            osd.poll();
+        };
+        xhr.open("GET", %(state_url)s + "?seq=" + osd.seq);
+        xhr.send();
     }
+
+    Component.onCompleted: poll()
 }
 """
 # Without the KWin script: keep the loading screen up briefly after a Steam
@@ -594,12 +606,21 @@ class SessionKeeper(threading.Thread):
         self.brightness_raw = brightness_raw
         # Without the lock, only hold brightness while KDE starts up.
         self.release_at = None if hold_brightness_for is None else time.monotonic() + hold_brightness_for
+        self.wifi_links = wifi_link_changes()
+        self.next_wifi_check = time.monotonic() + WIFI_RECHECK_INTERVAL
         self.stopped = threading.Event()
 
     def run(self):
         while not self.stopped.wait(KEEPER_INTERVAL):
-            if self.release_at is not None and time.monotonic() >= self.release_at:
+            now = time.monotonic()
+            if self.release_at is not None and now >= self.release_at:
                 self.brightness_raw = self.release_at = None
+            # Wi-Fi power saving needs steamosctl to read, so only look after
+            # the link went down or up, plus a slow check in case one is missed.
+            links = wifi_link_changes()
+            check_wifi = links != self.wifi_links or now >= self.next_wifi_check
+            if check_wifi:
+                self.wifi_links, self.next_wifi_check = links, now + WIFI_RECHECK_INTERVAL
             switched = False
             if self.auto_profile:
                 wanted = resolve_power_profile("auto")
@@ -610,6 +631,8 @@ class SessionKeeper(threading.Thread):
                     switched = True
             changed = {}
             for key, value in self.power.items():
+                if key == "wifi_powersave" and not check_wifi:
+                    continue
                 current = get_power_setting(key)
                 if current is not None and current != value and set_power_setting(key, value):
                     changed[key] = current
@@ -626,6 +649,17 @@ class SessionKeeper(threading.Thread):
         # Wait so a check in flight can't re-apply after restore() resets things.
         self.stopped.set()
         self.join(timeout=5)
+
+
+def wifi_link_changes():
+    """How often the wireless links have gone down or up (the kernel's
+    carrier_changes): a reconnect, or NetworkManager restarting, can turn
+    the driver's power saving back on."""
+    total = 0
+    for wireless in glob.glob(os.path.join(SYSFS_ROOT, "class/net/*/wireless")):
+        value = read_text(os.path.join(os.path.dirname(wireless), "carrier_changes"))
+        total += int(value) if value and value.isdigit() else 0
+    return total
 
 
 def backlight_dir():
@@ -702,41 +736,69 @@ class Osd:
 
     def __init__(self):
         self.proc = None
-        self.seq = 0
-        self.lock = threading.Lock()
+        self.server = None
+        self.state = {"seq": 0, "label": "", "level": 0, "text": ""}
+        self.changed = threading.Condition()
 
     def start(self):
         qml = shutil.which("qml6") or shutil.which("qml")
         if not qml:
             log("no qml runtime, skipping the on-screen indicator")
             return False
-        write_file(
-            OSD_SCREEN,
-            OSD_QML
-            % {
-                "title": json.dumps(OSD_TITLE),
-                "state_url": json.dumps("file://" + OSD_STATE),
-            },
-        )
-        write_json(OSD_STATE, {"seq": 0, "label": "", "level": 0, "text": ""})
-        env = dict(os.environ, QT_WAYLAND_SHELL_INTEGRATION="layer-shell", QML_XHR_ALLOW_FILE_READ="1")
+        try:
+            self.server = self.serve()
+        except OSError as e:
+            log(f"on-screen indicator server failed to start: {e}")
+            return False
+        url = f"http://127.0.0.1:{self.server.server_address[1]}/"
+        write_file(OSD_SCREEN, OSD_QML % {"title": json.dumps(OSD_TITLE), "state_url": json.dumps(url)})
+        env = dict(os.environ, QT_WAYLAND_SHELL_INTEGRATION="layer-shell")
         try:
             self.proc = subprocess.Popen(
                 [qml, OSD_SCREEN], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
             )
         except OSError as e:
             log(f"on-screen indicator failed to start: {e}")
+            self.server.shutdown()
             return False
         return True
 
+    def serve(self):
+        osd = self
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen = re.search(r"[?&]seq=(\d+)", self.path)
+                seen = int(seen.group(1)) if seen else -1
+                with osd.changed:
+                    # Answer at once if the overlay is behind, else when something
+                    # changes; the timeout only stops a request living forever.
+                    osd.changed.wait_for(lambda: osd.state["seq"] != seen, timeout=OSD_POLL_TIMEOUT)
+                    body = json.dumps(osd.state).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return server
+
     def show(self, label, level, text):
-        with self.lock:
-            self.seq += 1
-            write_json(OSD_STATE, {"seq": self.seq, "label": label, "level": level, "text": text})
+        with self.changed:
+            self.state = {"seq": self.state["seq"] + 1, "label": label, "level": level, "text": text}
+            self.changed.notify_all()
 
     def stop(self):
         if self.proc and self.proc.poll() is None:
             self.proc.terminate()
+        if self.server:
+            self.server.shutdown()
 
 
 class VolumeWatcher:
@@ -1400,11 +1462,60 @@ MOONLIGHT_KEYS = {
     "hdr": "hdr",
     # 0 auto, 1 H.264, 2 HEVC, 4 AV1, 5 PyroWave (Nonary's fork).
     "codec": "videocfg",
+    "yuv444": "yuv444",
+    "stats": "showperfoverlay",
     # Nonary's VRR fork only.
     "vrr": "enablevrr",
 }
 # Only Nonary's VRR fork saves this key.
 MOONLIGHT_FORK_KEY = "enablevrr"
+MOONLIGHT_PYROWAVE = 5
+
+# Moonlight's getDefaultBitrate(): (pixels, factor) points, interpolated.
+MOONLIGHT_BITRATE_TABLE = (
+    (640 * 360, 1),
+    (854 * 480, 2),
+    (1280 * 720, 5),
+    (1920 * 1080, 10),
+    (2560 * 1440, 20),
+    (3840 * 2160, 40),
+)
+# Nonary's fork, PyroWave: the PyroWave author's bitrate regression at his
+# "good quality" level (35 dB PSNR-HVS-M-H, viewing distance twice the screen
+# height), polynomial coefficients for 4:2:0 and 4:4:4.
+PYROWAVE_GOOD_QUALITY = {
+    False: (611.9945665176643, 87.22375978784984, -374.2744854882103, 138.525763156332,
+            404.3879014230974, -64.04327593791751, -194.8035057145124, -12.904253458542499),
+    True: (719.659360640365, 51.9223145866537, -522.3229212980714, 104.10383129754959,
+           605.6153091742109, 87.26139899802612, -306.13390524230874, -110.39755862218644),
+}  # fmt: skip
+
+
+def moonlight_default_bitrate(width, height, fps, yuv444=False, codec=0, hdr=False):
+    """The bitrate (kbps) Moonlight picks for these settings with "Use Default",
+    as Nonary's fork does for PyroWave and upstream Moonlight for the rest."""
+    pixels = width * height
+    if codec == MOONLIGHT_PYROWAVE:
+        # The regression covers 720p to 4K; outside that, the nearest end.
+        pixels = min(max(pixels, 1280 * 720), 3840 * 2160)
+        x = math.sqrt(pixels * 1e-6) - 2.0
+        estimate = sum(c * x**i for i, c in enumerate(PYROWAVE_GOOD_QUALITY[bool(yuv444)]))
+        kbps = int(estimate * 8e-3 * max(fps, 1) * (1.2 if hdr else 1.0) * 1000)
+        return math.ceil(kbps / 5000) * 5000  # the fork's slider step
+    table = MOONLIGHT_BITRATE_TABLE
+    if pixels <= table[0][0]:
+        factor = table[0][1]
+    elif pixels >= table[-1][0]:
+        factor = table[-1][1]
+    else:
+        i = next(i for i, (p, _) in enumerate(table) if pixels <= p)
+        (p0, f0), (p1, f1) = table[i - 1], table[i]
+        factor = (pixels - p0) / (p1 - p0) * (f1 - f0) + f0
+    if yuv444:
+        factor *= 2
+    # Not linear past 60 FPS.
+    frame_rate = (fps if fps <= 60 else math.sqrt(fps / 60) * 60) / 30
+    return math.floor(factor * frame_rate + 0.5) * 1000  # qRound
 
 
 def moonlight_conf(pending=None):
@@ -1495,8 +1606,30 @@ def override_moonlight(pending, info):
     if MOONLIGHT_FORK_KEY not in original:
         # Upstream Moonlight: no VRR, no PyroWave, whatever the profile says.
         wanted.pop(MOONLIGHT_KEYS["vrr"], None)
-        if wanted.get(MOONLIGHT_KEYS["codec"]) == "5":
+        if wanted.get(MOONLIGHT_KEYS["codec"]) == str(MOONLIGHT_PYROWAVE):
             del wanted[MOONLIGHT_KEYS["codec"]]
+    if profile.get("auto_bitrate"):
+        # Moonlight's default for what it will actually use, own values included.
+        def value(field, fallback):
+            key = MOONLIGHT_KEYS[field]
+            return wanted.get(key, original.get(key)) or fallback
+
+        def flag(field):
+            return value(field, "false") == "true"
+
+        try:
+            wanted[MOONLIGHT_KEYS["bitrate"]] = str(
+                moonlight_default_bitrate(
+                    int(value("width", "1280")),
+                    int(value("height", "720")),
+                    int(value("fps", "60")),
+                    flag("yuv444"),
+                    int(value("codec", "0")),
+                    flag("hdr"),
+                )
+            )
+        except ValueError:
+            log("Moonlight's settings have an unreadable value, keeping the profile's bitrate")
     changes = {k: v for k, v in wanted.items() if original.get(k) != v}
     if not changes:
         log(f"Moonlight already set up for {info.get('name')}")
@@ -2020,6 +2153,100 @@ def watch_stream(proc, hold, stream, started):
     hold.release("stream")
 
 
+# Moonlight raises these threads with SDL_SetThreadPriority, which inside
+# Flatpak asks the portal, and SteamOS's portal can't map the sandbox's thread
+# IDs ("Could not get pidns ... PIDFD_GET_PID_NAMESPACE"), so it never takes,
+# in Gaming Mode either. The launcher asks rtkit directly instead, at the nice
+# levels SDL asks for (high -10, time-critical -20, which rtkit caps at -15).
+MOONLIGHT_PRIORITY_THREADS = {"PacerRender": -10, "AudioDec": -10, "PacerVsync": -15, "PacerVRR": -15}
+# SDL's own audio playback thread ("SDLAudioP" + device number), which SDL
+# asks to make time-critical the same way.
+SDL_AUDIO_THREAD = ("SDLAudioP", -15)
+PRIORITY_POLL = 2
+
+
+def rtkit_high_priority(pid, tid, nice):
+    return succeeded(
+        run(
+            [
+                "dbus-send", "--system", "--print-reply", "--dest=org.freedesktop.RealtimeKit1",
+                "/org/freedesktop/RealtimeKit1", "org.freedesktop.RealtimeKit1.MakeThreadHighPriorityWithPID",
+                f"uint64:{pid}", f"uint64:{tid}", f"int32:{nice}",
+            ]
+        )
+    )  # fmt: skip
+
+
+def process_group_member(group, comm):
+    """A process in `group` named `comm`, or None."""
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit():
+            continue
+        try:
+            with open(f"/proc/{pid}/stat") as f:
+                stat = f.read()
+        except OSError:
+            continue
+        # comm is in parentheses and may hold spaces; pgrp is the 3rd field after it.
+        name, rest = stat[stat.find("(") + 1 : stat.rfind(")")], stat[stat.rfind(")") + 2 :].split()
+        if name == comm and len(rest) > 2 and rest[2] == str(group):
+            return int(pid)
+    return None
+
+
+def thread_names(pid):
+    names = {}
+    try:
+        tids = os.listdir(f"/proc/{pid}/task")
+    except OSError:
+        return names
+    for tid in tids:
+        try:
+            with open(f"/proc/{pid}/task/{tid}/comm") as f:
+                names[int(tid)] = f.read().strip()
+        except OSError:
+            continue
+    return names
+
+
+class MoonlightPriority(threading.Thread):
+    """Gives Moonlight's pacing and audio threads the priority it asks for.
+    They come and go with each stream, so it keeps looking while Moonlight runs."""
+
+    def __init__(self, group):
+        super().__init__(daemon=True)
+        self.group = group
+        self.pid = None
+        self.done = set()
+        self.stopped = threading.Event()
+
+    def run(self):
+        while not self.stopped.wait(PRIORITY_POLL):
+            self.check()
+
+    def check(self):
+        if self.pid is None or not os.path.exists(f"/proc/{self.pid}"):
+            pid = process_group_member(self.group, "moonlight")
+            if pid != self.pid:
+                self.pid, self.done = pid, set()
+            if pid is None:
+                return
+        for tid, name in thread_names(self.pid).items():
+            nice = MOONLIGHT_PRIORITY_THREADS.get(name)
+            if name.startswith(SDL_AUDIO_THREAD[0]):
+                nice = SDL_AUDIO_THREAD[1]
+            if nice is None or tid in self.done:
+                continue
+            self.done.add(tid)
+            if rtkit_high_priority(self.pid, tid, nice):
+                log(f"Moonlight's {name} thread at nice {nice}")
+            else:
+                log(f"rtkit refused to raise Moonlight's {name} thread")
+
+    def stop(self):
+        self.stopped.set()
+
+
 def run_direct(pending, background_steam=False, hold=None):
     cwd = pending.get("cwd")
     if cwd and not os.path.isdir(cwd):
@@ -2036,6 +2263,10 @@ def run_direct(pending, background_steam=False, hold=None):
     proc = subprocess.Popen(["bash", "-c", pending["command"]], cwd=cwd or HOME, start_new_session=True, **output)
     if watch:
         threading.Thread(target=watch_stream, args=(proc, hold, pending["stream"], started), daemon=True).start()
+    priority = None
+    if is_moonlight(pending) and shutil.which("dbus-send"):
+        priority = MoonlightPriority(proc.pid)
+        priority.start()
     if background_steam:
         # Give the app a head start on CPU and disk before Steam's heavy startup.
         time.sleep(HYBRID_STEAM_DELAY)
@@ -2045,6 +2276,8 @@ def run_direct(pending, background_steam=False, hold=None):
             close_app(proc)
             break
     code = proc.wait()
+    if priority:
+        priority.stop()
     log(f"exited with {code} after {int(time.monotonic() - started)}s")
 
 
@@ -2439,6 +2672,7 @@ def main(argv):
         current = read_ini_section(moonlight_conf()) or {}
         values = {field: current.get(key) for field, key in MOONLIGHT_KEYS.items()}
         values["vrr_fork"] = MOONLIGHT_FORK_KEY in current
+        values["auto_bitrate"] = current.get("autoadjustbitrate")
         print(json.dumps(values))
         return 0
     if command == "--uninstall":

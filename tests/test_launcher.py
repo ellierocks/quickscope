@@ -9,8 +9,10 @@ import pathlib
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
+import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -396,6 +398,25 @@ class Power(LauncherTestCase):
         keeper.stop()
         self.assertEqual(self.state["boost"], "disabled")
 
+    def test_keeper_rechecks_wifi_only_after_the_link_changes(self):
+        changes = os.path.join(self.l.SYSFS_ROOT, "class/net/wlan0/carrier_changes")
+        self.l.write_file(os.path.join(self.l.SYSFS_ROOT, "class/net/wlan0/wireless/.keep"), "")
+        self.l.write_file(changes, "6\n")
+        self.state["wifi_powersave"] = "disabled"
+        self.l.KEEPER_INTERVAL = 0.01
+        keeper = self.l.SessionKeeper({"gpu": "high", "wifi_powersave": "disabled"}, None)
+        keeper.start()
+        self.addCleanup(keeper.stop)
+        # Something turns power saving back on without the link changing:
+        # left alone until the slow check (30 s), unlike the GPU level.
+        self.state.update(wifi_powersave="enabled", gpu="auto")
+        time.sleep(0.2)
+        self.assertEqual((self.state["gpu"], self.state["wifi_powersave"]), ("high", "enabled"))
+        # A reconnect: checked and turned off again.
+        self.l.write_file(changes, "8\n")
+        time.sleep(0.2)
+        self.assertEqual(self.state["wifi_powersave"], "disabled")
+
 
 class Network(LauncherTestCase):
     """Fake nmcli: one Wi-Fi connection whose saved BSSID the tests can see."""
@@ -711,6 +732,52 @@ class Moonlight(LauncherTestCase):
         values = self.conf_values()
         self.assertEqual((values["enablevrr"], values["videocfg"]), ("true", "5"))
 
+    def test_default_bitrate_matches_moonlight(self):
+        f = self.l.moonlight_default_bitrate
+        self.assertEqual(f(1920, 1080, 60), 20000)  # Moonlight's 1080p60 default
+        self.assertEqual(f(1280, 800, 60), 11000)  # interpolated between 720p and 1080p
+        self.assertEqual(f(1920, 1080, 60, yuv444=True), 40000)
+        self.assertEqual(f(3840, 2160, 120), 113000)  # sqrt scaling past 60 FPS
+        self.assertEqual(f(320, 200, 30), 1000)
+        self.assertEqual(f(7680, 4320, 60), 80000)
+        # PyroWave (Nonary's fork): 235 Mbps is what the fork saved on a Deck.
+        self.assertEqual(f(1920, 1200, 60, codec=5), 235000)
+        self.assertEqual(f(3840, 2160, 60, codec=5, hdr=True), 350000)
+        self.assertEqual(f(1280, 800, 60, codec=5), 150000)
+
+    def test_auto_bitrate_follows_what_moonlight_will_use(self):
+        profile = self.pending["moonlight_profiles"]["SAM-71B5"]
+        profile.update(auto_bitrate=True, yuv444=True, stats=True)
+        self.l.override_moonlight(self.pending, self.l.display_info())
+        values = self.conf_values()
+        self.assertEqual((values["bitrate"], values["yuv444"], values["showperfoverlay"]), ("160000", "true", "true"))
+        self.l.restore(reload=False)
+        # Without a codec in the profile, Moonlight's own (PyroWave here) counts.
+        del profile["yuv444"]
+        self.l.write_ini_values(self.conf, {"enablevrr": "false", "videocfg": "5"})
+        self.l.override_moonlight(self.pending, self.l.display_info())
+        expected = self.l.moonlight_default_bitrate(3840, 2160, 60, codec=5, hdr=True)
+        self.assertEqual(self.conf_values()["bitrate"], str(expected))
+
+    def test_priority_raises_moonlights_threads_once(self):
+        calls, threads = [], {10: "moonlight", 11: "PacerRender", 12: "AudioDec", 13: "VideoRecv", 15: "SDLAudioP31"}
+        for name, fake in (
+            ("process_group_member", lambda group, comm: 10 if (group, comm) == (5, "moonlight") else None),
+            ("thread_names", lambda pid: dict(threads)),
+            ("rtkit_high_priority", lambda pid, tid, nice: calls.append((pid, tid, nice)) or True),
+        ):
+            real = getattr(self.l, name)
+            self.addCleanup(setattr, self.l, name, real)
+            setattr(self.l, name, fake)
+        priority = self.l.MoonlightPriority(5)
+        priority.check()
+        self.assertEqual(sorted(calls), [(10, 11, -10), (10, 12, -10), (10, 15, -15)])
+        # A new stream's render thread is picked up; old ones aren't asked again.
+        threads[14] = "PacerVsync"
+        calls.clear()
+        priority.check()
+        self.assertEqual(calls, [(10, 14, -15)])
+
     def test_settings_file_prefers_the_flatpak(self):
         native = os.path.join(self.home, ".config", "Moonlight Game Streaming Project", "Moonlight.conf")
         self.l.write_file(native, "[General]\nwidth=1920\n")
@@ -781,9 +848,30 @@ class Volume(LauncherTestCase):
         self.assertIn("visible: !false", qml)
 
     def test_osd_qml_is_filled_in(self):
-        qml = self.l.OSD_QML % {"title": '"t"', "state_url": '"file:///x"'}
+        qml = self.l.OSD_QML % {"title": '"t"', "state_url": '"http://127.0.0.1:1/"'}
         self.assertIn("text: osd.valueText", qml)
         self.assertNotIn("%(", qml)
+
+    def test_osd_server_answers_only_when_something_changes(self):
+        osd = self.l.Osd()
+        osd.server = osd.serve()
+        self.addCleanup(osd.server.shutdown)
+        url = f"http://127.0.0.1:{osd.server.server_address[1]}/"
+        results = []
+
+        def fetch(seq):
+            with urllib.request.urlopen(f"{url}?seq={seq}", timeout=5) as r:
+                results.append(json.loads(r.read()))
+
+        waiting = threading.Thread(target=fetch, args=(0,))
+        waiting.start()
+        waiting.join(0.3)
+        self.assertTrue(waiting.is_alive())  # nothing new yet: still waiting
+        osd.show("Volume", 0.5, "50%")
+        waiting.join(2)
+        self.assertEqual(results, [{"seq": 1, "label": "Volume", "level": 0.5, "text": "50%"}])
+        fetch(0)  # behind: answered at once
+        self.assertEqual(results[-1]["seq"], 1)
 
 
 class LogTrim(LauncherTestCase):

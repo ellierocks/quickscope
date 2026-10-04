@@ -74,6 +74,11 @@ export interface MoonlightProfile {
   hdr?: boolean;
   /** Moonlight's videocfg: 0 auto, 1 H.264, 2 HEVC, 4 AV1, 5 PyroWave. */
   codec?: number;
+  /** Moonlight's default bitrate for the other settings, worked out at launch. */
+  auto_bitrate?: boolean;
+  yuv444?: boolean;
+  /** Moonlight's performance stats overlay. */
+  stats?: boolean;
   /** Nonary's VRR fork only. */
   vrr?: boolean;
   /** Whether the display supported VRR when the profile was made. */
@@ -82,7 +87,18 @@ export interface MoonlightProfile {
 
 /** Moonlight.conf's raw values, as strings ("1280", "true"), or null if unset. */
 export type MoonlightSettings = Record<
-  "width" | "height" | "fps" | "bitrate" | "vsync" | "framepacing" | "hdr" | "codec" | "vrr",
+  | "width"
+  | "height"
+  | "fps"
+  | "bitrate"
+  | "vsync"
+  | "framepacing"
+  | "hdr"
+  | "codec"
+  | "yuv444"
+  | "stats"
+  | "vrr"
+  | "auto_bitrate",
   string | null
 > & {
   /** Nonary's VRR fork is installed (its settings have VRR keys). */

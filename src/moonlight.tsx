@@ -23,6 +23,7 @@ import {
   getSettings,
   setSetting,
 } from "./backend";
+import { defaultBitrate } from "./bitrate";
 
 export const MOONLIGHT_ROUTE = "/quickscope/moonlight";
 
@@ -69,6 +70,10 @@ function profileFrom(display: DisplayInfo, current: MoonlightSettings | null): M
     framepacing: bool(current?.framepacing, true),
     hdr: bool(current?.hdr, false),
     codec: num(current?.codec, 0),
+    yuv444: bool(current?.yuv444, false),
+    stats: bool(current?.stats, false),
+    // Moonlight keeps its bitrate at the default until it's moved by hand.
+    auto_bitrate: bool(current?.auto_bitrate, true),
     vrr_capable: display.vrr_capable,
     // Only Nonary's fork knows VRR; upstream profiles leave it out entirely.
     ...(current?.vrr_fork ? { vrr: display.vrr_capable && bool(current.vrr, false) } : {}),
@@ -104,17 +109,38 @@ function ProfileEditor({
   onChange: (profile: MoonlightProfile) => void;
 }) {
   const fork = !!current?.vrr_fork;
-  const bitrate = profile.bitrate ?? num(current?.bitrate, DEFAULT_BITRATE);
   const hdr = profile.hdr ?? bool(current?.hdr, false);
+  const yuv444 = profile.yuv444 ?? bool(current?.yuv444, false);
+  const stats = profile.stats ?? bool(current?.stats, false);
+  const autoBitrate = !!profile.auto_bitrate;
   const codecs = fork ? [...CODECS, PYROWAVE] : CODECS;
   let codec = profile.codec ?? num(current?.codec, 0);
   // PyroWave saved by the fork, now running upstream Moonlight.
   if (!codecs.some((c) => c.data === codec)) codec = 0;
+  const pyrowave = codec === PYROWAVE.data;
+  const bitrate = autoBitrate
+    ? defaultBitrate(profile.width, profile.height, profile.fps, yuv444, codec, hdr)
+    : (profile.bitrate ?? num(current?.bitrate, DEFAULT_BITRATE));
   const vrr = fork && vrrCapable && (profile.vrr ?? bool(current?.vrr, false));
   const vrrChoices = vrr && native ? vrrRates(native.fps) : null;
   // Every edit saves every field shown, so Moonlight follows all of them.
-  const change = (patch: Partial<MoonlightProfile>) =>
-    onChange({ ...profile, bitrate, hdr, codec, ...(fork && vrrCapable ? { vrr } : {}), ...patch });
+  const change = (patch: Partial<MoonlightProfile>) => {
+    const next: MoonlightProfile = {
+      ...profile,
+      bitrate,
+      hdr,
+      codec,
+      yuv444,
+      stats,
+      auto_bitrate: autoBitrate,
+      ...(fork && vrrCapable ? { vrr } : {}),
+      ...patch,
+    };
+    // Keep the saved bitrate in step; the launcher works it out again anyway.
+    if (next.auto_bitrate)
+      next.bitrate = defaultBitrate(next.width, next.height, next.fps, !!next.yuv444, next.codec ?? 0, !!next.hdr);
+    onChange(next);
+  };
   const resolutions = [...RESOLUTIONS];
   const extra: [number, number][] = [[profile.width, profile.height]];
   if (native) extra.push([native.width, native.height]);
@@ -183,15 +209,30 @@ function ProfileEditor({
         selectedOption={codec}
         onChange={(o) => change({ codec: Number(o.data) })}
       />
-      <SliderField
-        label="Bitrate"
-        value={Math.round(bitrate / 1000)}
-        min={5}
-        max={500}
-        step={5}
-        showValue
-        valueSuffix=" Mbps"
-        onChange={(mbps) => change({ bitrate: mbps * 1000 })}
+      <ToggleField
+        label="Automatic bitrate"
+        description={`Moonlight's own default for these settings, kept up to date as they change: ${bitrate / 1000} Mbps.`}
+        checked={autoBitrate}
+        onChange={(on) => change({ auto_bitrate: on })}
+      />
+      {!autoBitrate && (
+        <SliderField
+          label="Bitrate"
+          value={Math.round(bitrate / 1000)}
+          min={5}
+          // PyroWave needs several hundred Mbps; the fork allows up to 3 Gbps.
+          max={pyrowave ? 3000 : 500}
+          step={5}
+          showValue
+          valueSuffix=" Mbps"
+          onChange={(mbps) => change({ bitrate: mbps * 1000 })}
+        />
+      )}
+      <ToggleField
+        label="YUV 4:4:4"
+        description="Full colour detail, sharper for text and fine lines. Needs support from the host and the decoder, and about twice the bitrate."
+        checked={yuv444}
+        onChange={(on) => change({ yuv444: on })}
       />
       <ToggleField
         label="V-Sync"
@@ -211,6 +252,12 @@ function ProfileEditor({
         checked={hdr}
         onChange={(on) => change({ hdr: on })}
       />
+      <ToggleField
+        label="Performance stats"
+        description="Moonlight's statistics overlay while streaming."
+        checked={stats}
+        onChange={(on) => change({ stats: on })}
+      />
     </>
   );
 }
@@ -226,15 +273,14 @@ function MoonlightPage() {
     getMoonlightSettings().then(setCurrent);
   }, []);
 
-  // Profiles made before bitrate, HDR and codec existed: fill those in from
-  // Moonlight's current values, as the page shows them, so Moonlight follows
-  // every setting here rather than its own for some.
+  // Profiles made before some settings existed: fill those in from Moonlight's
+  // current values, as the page shows them, so Moonlight follows every setting
+  // here rather than its own for some. Their bitrate stays as it was set.
   useEffect(() => {
     if (!settings || !current) return;
     const profiles = settings.moonlight_profiles;
-    const incomplete = Object.keys(profiles).filter(
-      (id) => profiles[id].bitrate === undefined || profiles[id].hdr === undefined || profiles[id].codec === undefined,
-    );
+    const fields = ["bitrate", "hdr", "codec", "yuv444", "stats", "auto_bitrate"] as const;
+    const incomplete = Object.keys(profiles).filter((id) => fields.some((f) => profiles[id][f] === undefined));
     if (incomplete.length === 0) return;
     const next = { ...profiles };
     for (const id of incomplete) {
@@ -243,6 +289,9 @@ function MoonlightPage() {
         bitrate: next[id].bitrate ?? num(current.bitrate, DEFAULT_BITRATE),
         hdr: next[id].hdr ?? bool(current.hdr, false),
         codec: next[id].codec ?? num(current.codec, 0),
+        yuv444: next[id].yuv444 ?? bool(current.yuv444, false),
+        stats: next[id].stats ?? bool(current.stats, false),
+        auto_bitrate: next[id].auto_bitrate ?? false,
       };
     }
     setSetting("moonlight_profiles", next).then(setSettings);

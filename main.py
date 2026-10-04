@@ -197,9 +197,11 @@ def _clean_moonlight_profile(profile):
     }
     # Added later; profiles without them leave Moonlight's own value alone.
     if profile.get("bitrate") is not None:
-        clean["bitrate"] = max(500, min(1000000, int(profile["bitrate"])))  # kbps
-    if profile.get("hdr") is not None:
-        clean["hdr"] = bool(profile["hdr"])
+        # kbps, up to the VRR fork's PyroWave maximum.
+        clean["bitrate"] = max(500, min(3000000, int(profile["bitrate"])))
+    for field in ("hdr", "yuv444", "stats", "auto_bitrate"):
+        if profile.get(field) is not None:
+            clean[field] = bool(profile[field])
     if profile.get("codec") is not None and int(profile["codec"]) in MOONLIGHT_CODECS:
         clean["codec"] = int(profile["codec"])
     if profile.get("vrr_capable") is not None:
