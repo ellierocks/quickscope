@@ -25,6 +25,7 @@ nothing here touches files a SteamOS update replaces.
 Standard library only: this runs on the system Python, not Decky's.
 """
 
+import collections
 import glob
 import http.server
 import json
@@ -110,6 +111,10 @@ BATTERY_WARN_LEVELS = (20, 10, 2)
 BATTERY_CRITICAL = 2  # at or below: "Battery critical"
 BATTERY_POLL = 20
 BATTERY_WARNING_TIME = 6000
+# Battery status on a tap of "…": shown this long (ms), with the projected
+# time from the average of this many BATTERY_POLL samples (5 minutes).
+BATTERY_STATUS_TIME = 4000
+BATTERY_SAMPLES = 15
 
 # Steam's brightness slider drives the backlight through roughly this curve
 # (measured on a Deck LCD: 48% -> 26% of the backlight's range, 100% -> max).
@@ -433,7 +438,8 @@ import org.kde.layershell 1.0 as LayerShell
 Window {
     id: osd
     title: %(title)s
-    width: 420
+    // Room for the longest text (the battery's); the box itself fits its row.
+    width: 640
     height: 120
     visible: false
     color: "transparent"
@@ -452,12 +458,13 @@ Window {
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 48
-        width: parent.width
+        width: Math.min(parent.width, Math.max(420, row.implicitWidth + 48))
         height: 56
         radius: 10
         color: "#e6171a21"
 
         Row {
+            id: row
             anchors.centerIn: parent
             spacing: 16
             Text {
@@ -484,7 +491,7 @@ Window {
                 text: osd.valueText
                 color: "#ffffff"
                 font.pixelSize: 20
-                width: 64
+                width: Math.max(64, implicitWidth)
                 anchors.verticalCenter: parent.verticalCenter
             }
         }
@@ -922,14 +929,21 @@ def combo_direction(report):
 
 
 class BrightnessCombo(threading.Thread):
-    """ "…" + left stick up/down changes the brightness, like hardware keys.
-    Reads the controller passively, so Steam and the app still see everything."""
+    """ "…" + left stick up/down changes the brightness, like hardware keys;
+    a tap calls `on_tap` (the battery), and a 3 s hold quits. Reads the
+    controller passively, so Steam and the app still see everything."""
 
-    def __init__(self, osd, keeper):
+    def __init__(self, osd, keeper, on_tap=None):
         super().__init__(daemon=True)
         self.osd = osd
         self.keeper = keeper
+        self.on_tap = on_tap
         self.stopped = threading.Event()
+        self.held, self.next_step = 0, 0.0
+        # Holding "…" alone is the way out: a stuck or hung app, or a session
+        # with no other exit. Moving the stick during the press (brightness)
+        # cancels it.
+        self.pressed_since, self.used_for_brightness, self.shown = None, False, -1
 
     def run(self):
         node = deck_controller_node()
@@ -942,11 +956,6 @@ class BrightnessCombo(threading.Thread):
             log(f"brightness shortcut can't read {node}: {e}")
             return
         log(f"brightness shortcut reading {node}")
-        held, next_step = 0, 0.0
-        # Holding "…" alone is the way out: a stuck or hung app, or a session
-        # with no other exit. Moving the stick during the press (brightness)
-        # cancels it.
-        pressed_since, used_for_brightness, shown = None, False, -1
         try:
             # The controller reports ~250 times a second. Waking for each costs
             # about 1% of a core all session, so check every COMBO_POLL and
@@ -963,34 +972,40 @@ class BrightnessCombo(threading.Thread):
                 except OSError as e:
                     log(f"brightness shortcut stopped: {e}")
                     return
-                if report is None:
-                    continue
-                direction = combo_direction(report)
-                now = time.monotonic()
-                if not combo_button_held(report):
-                    pressed_since, used_for_brightness, shown = None, False, -1
-                else:
-                    pressed_since = pressed_since or now
-                    used_for_brightness = used_for_brightness or bool(direction)
-                    held_for = now - pressed_since
-                    if not used_for_brightness and held_for >= EXIT_HINT_AFTER and not EXIT_REQUESTED.is_set():
-                        progress = min(1.0, (held_for - EXIT_HINT_AFTER) / (EXIT_HOLD - EXIT_HINT_AFTER))
-                        if self.osd and int(progress * 10) != shown:
-                            shown = int(progress * 10)
-                            self.osd.show("Hold to quit", progress, "")
-                        if held_for >= EXIT_HOLD:
-                            log('"…" held: closing the app')
-                            EXIT_REQUESTED.set()
-                if direction != held:
-                    held = direction
-                    if direction:
-                        self.step(direction)
-                        next_step = now + COMBO_REPEAT_DELAY
-                elif direction and now >= next_step:
-                    self.step(direction)
-                    next_step = now + COMBO_REPEAT_INTERVAL
+                if report is not None:
+                    self.handle(report, time.monotonic())
         finally:
             os.close(fd)
+
+    def handle(self, report, now):
+        direction = combo_direction(report)
+        if not combo_button_held(report):
+            # A quick tap, before the quit hint: the battery, as Gaming Mode's
+            # Quick Access menu would show it.
+            tapped = self.pressed_since is not None and now - self.pressed_since < EXIT_HINT_AFTER
+            if tapped and not self.used_for_brightness and self.on_tap:
+                self.on_tap()
+            self.pressed_since, self.used_for_brightness, self.shown = None, False, -1
+        else:
+            self.pressed_since = self.pressed_since or now
+            self.used_for_brightness = self.used_for_brightness or bool(direction)
+            held_for = now - self.pressed_since
+            if not self.used_for_brightness and held_for >= EXIT_HINT_AFTER and not EXIT_REQUESTED.is_set():
+                progress = min(1.0, (held_for - EXIT_HINT_AFTER) / (EXIT_HOLD - EXIT_HINT_AFTER))
+                if self.osd and int(progress * 10) != self.shown:
+                    self.shown = int(progress * 10)
+                    self.osd.show("Hold to quit", progress, "")
+                if held_for >= EXIT_HOLD:
+                    log('"…" held: closing the app')
+                    EXIT_REQUESTED.set()
+        if direction != self.held:
+            self.held = direction
+            if direction:
+                self.step(direction)
+                self.next_step = now + COMBO_REPEAT_DELAY
+        elif direction and now >= self.next_step:
+            self.step(direction)
+            self.next_step = now + COMBO_REPEAT_INTERVAL
 
     def step(self, direction):
         current = read_backlight()
@@ -1783,15 +1798,50 @@ def plugged_in():
     return not has_battery
 
 
+def battery_dir():
+    for supply in sorted(glob.glob(os.path.join(POWER_SUPPLY_ROOT, "*"))):
+        if read_text(os.path.join(supply, "type")) == "Battery":
+            return supply
+    return None
+
+
 def battery_status():
     """(percent, discharging) of the first battery, or None without one."""
-    for supply in sorted(glob.glob(os.path.join(POWER_SUPPLY_ROOT, "*"))):
-        if read_text(os.path.join(supply, "type")) != "Battery":
-            continue
-        capacity = read_text(os.path.join(supply, "capacity"))
-        if capacity and capacity.isdigit():
-            return int(capacity), read_text(os.path.join(supply, "status")) == "Discharging"
+    supply = battery_dir()
+    capacity = supply and read_text(os.path.join(supply, "capacity"))
+    if capacity and capacity.isdigit():
+        return int(capacity), read_text(os.path.join(supply, "status")) == "Discharging"
     return None
+
+
+def battery_charge():
+    """(status, charge now, full charge, current) of the first battery: µAh
+    and µA (the Deck), or µWh and µW where only energy is reported. None
+    without one."""
+    supply = battery_dir()
+    if not supply:
+        return None
+    for keys in (("charge_now", "charge_full", "current_now"), ("energy_now", "energy_full", "power_now")):
+        values = [read_text(os.path.join(supply, key)) for key in keys]
+        if all(v and v.lstrip("-").isdigit() for v in values):
+            now, full, rate = (abs(int(v)) for v in values)
+            return read_text(os.path.join(supply, "status")), now, full, rate
+    return None
+
+
+def format_duration(hours):
+    hours, minutes = divmod(round(hours * 60), 60)
+    return f"{hours}h {minutes:02d}m" if hours else f"{minutes} min"
+
+
+def battery_summary(pct, status, now, full, rate):
+    """(label, value) for the battery on the OSD: time left on battery, or
+    time to full while charging. `rate` is an average current (or power)."""
+    if status == "Discharging":
+        return f"Battery {pct}%", f"{format_duration(now / rate)} left" if rate else ""
+    if status == "Charging":
+        return f"Charging {pct}%", f"Full in {format_duration((full - now) / rate)}" if rate and full > now else ""
+    return f"Battery {pct}%", "Full" if status == "Full" else "Plugged in"
 
 
 class BatteryWarning(threading.Thread):
@@ -1803,13 +1853,44 @@ class BatteryWarning(threading.Thread):
         super().__init__(daemon=True)
         self.osd = osd
         self.warned = set()
+        # Recent currents, for a steadier estimate than one reading: the
+        # Deck's jumps by 10% from second to second.
+        self.samples = collections.deque(maxlen=BATTERY_SAMPLES)
+        self.sampled_status = None
         self.stopped = threading.Event()
 
     def run(self):
+        self.sample()
         while not self.stopped.wait(BATTERY_POLL):
             self.check()
 
+    def sample(self, record=True):
+        """The current reading, with its rate averaged over recent samples.
+        `record` adds it to them (the regular poll, not a tap)."""
+        charge = battery_charge()
+        if not charge:
+            return None
+        status, now, full, rate = charge
+        if status != self.sampled_status:
+            # Charging and discharging rates don't mix.
+            self.samples.clear()
+            self.sampled_status = status
+        rates = [*self.samples, rate]
+        if record:
+            self.samples.append(rate)
+        return status, now, full, sum(rates) / len(rates)
+
+    def show_status(self):
+        """The battery and its projected time, on a tap of "…"."""
+        status = battery_status()
+        charge = self.sample(record=False)
+        if not status or not charge:
+            return
+        label, value = battery_summary(status[0], *charge)
+        self.osd.show(label, status[0] / 100, value, duration=BATTERY_STATUS_TIME)
+
     def check(self):
+        self.sample()
         status = battery_status()
         if not status:
             return
@@ -2727,11 +2808,11 @@ def launch():
     volume = VolumeWatcher(osd) if osd else None
     if volume and not volume.start():
         volume = None
-    combo = BrightnessCombo(osd, keeper)
-    combo.start()
     battery = BatteryWarning(osd) if osd and battery_status() else None
     if battery:
         battery.start()
+    combo = BrightnessCombo(osd, keeper, on_tap=battery.show_status if battery else None)
+    combo.start()
     returning = pending.get("return_to_gaming")
     if hold and "network" in hold.reasons:
         # Desktop Steam restarts NetworkManager (wpa_supplicant); otherwise

@@ -507,6 +507,29 @@ class Power(LauncherTestCase):
         self.l.POWER_SUPPLY_ROOT = os.path.join(self.home, "no-battery")  # e.g. a Steam Machine
         self.assertIsNone(self.l.battery_status())
 
+    def test_battery_status_averages_the_current(self):
+        self.supplies(ACAD=("Mains", "0"), BAT1=("Battery", None))
+        bat = os.path.join(self.l.POWER_SUPPLY_ROOT, "BAT1")
+
+        def battery(current, status="Discharging", charge=1051000):
+            for name, value in (("capacity", 22), ("status", status), ("charge_now", charge),
+                                ("charge_full", 4694000), ("current_now", current)):  # fmt: skip
+                self.l.write_file(os.path.join(bat, name), f"{value}\n")
+
+        shown = []
+        osd = type("Osd", (), {"show": lambda _, label, level, text, **kw: shown.append(f"{label}: {text}")})()
+        warning = self.l.BatteryWarning(osd)
+        for current in (600000, 900000):  # two polls
+            battery(current)
+            warning.check()
+        battery(750000)
+        warning.show_status()  # averages 600, 900 and now 750 mA: 1.4 h
+        warning.show_status()  # a tap isn't a sample: the same again
+        self.assertEqual(shown, ["Battery 22%: 1h 24m left"] * 2)
+        battery(2000000, "Charging")  # plugged in: only charging currents count
+        warning.show_status()
+        self.assertEqual(shown[-1], "Charging 22%: Full in 1h 49m")
+
     def test_keeper_rechecks_wifi_only_after_the_link_changes(self):
         changes = os.path.join(self.l.SYSFS_ROOT, "class/net/wlan0/carrier_changes")
         self.l.write_file(os.path.join(self.l.SYSFS_ROOT, "class/net/wlan0/wireless/.keep"), "")
@@ -923,6 +946,34 @@ class Combo(LauncherTestCase):
     def test_state_report(self):
         self.assertTrue(self.l.is_deck_state_report(self.report(False, 0)))
         self.assertFalse(self.l.is_deck_state_report(b"\x01\x00\x09"))
+
+    def test_tap_shows_the_battery_but_not_after_a_hold_or_brightness(self):
+        taps, shown = [], []
+        osd = type("Osd", (), {"show": lambda _, *args, **kwargs: shown.append(args[0])})()
+        combo = self.l.BrightnessCombo(osd, None, on_tap=lambda: taps.append(1))
+        combo.step = lambda direction: None
+        self.addCleanup(self.l.EXIT_REQUESTED.clear)
+        press, release = self.report(True, 0), self.report(False, 0)
+        combo.handle(press, 10.0)
+        combo.handle(release, 10.2)  # a tap
+        self.assertEqual(taps, [1])
+        combo.handle(press, 20.0)
+        combo.handle(press, 21.5)  # held past the quit hint
+        combo.handle(release, 21.6)
+        self.assertEqual((taps, shown), ([1], ["Hold to quit"]))
+        combo.handle(press, 30.0)
+        combo.handle(self.report(True, 32767), 30.1)  # brightness
+        combo.handle(release, 30.3)
+        self.assertEqual(taps, [1])
+
+    def test_battery_summary(self):
+        s = self.l.battery_summary
+        self.assertEqual(s(22, "Discharging", 1051000, 4694000, 750000), ("Battery 22%", "1h 24m left"))
+        self.assertEqual(s(22, "Charging", 1051000, 4694000, 2000000), ("Charging 22%", "Full in 1h 49m"))
+        self.assertEqual(s(5, "Discharging", 200000, 4694000, 800000), ("Battery 5%", "15 min left"))
+        self.assertEqual(s(100, "Full", 4694000, 4694000, 0), ("Battery 100%", "Full"))
+        self.assertEqual(s(80, "Not charging", 3700000, 4694000, 0), ("Battery 80%", "Plugged in"))
+        self.assertEqual(s(50, "Discharging", 2300000, 4694000, 0), ("Battery 50%", ""))
 
 
 class Volume(LauncherTestCase):
