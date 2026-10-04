@@ -106,7 +106,8 @@ POWER_SUPPLY_ROOT = "/sys/class/power_supply"
 # Low-battery warnings on the OSD, in percent, checked every BATTERY_POLL
 # seconds (about 1% of a Deck's battery while streaming) and shown for
 # BATTERY_WARNING_TIME milliseconds.
-BATTERY_WARN_LEVELS = (10, 5)
+BATTERY_WARN_LEVELS = (20, 10, 2)
+BATTERY_CRITICAL = 2  # at or below: "Battery critical"
 BATTERY_POLL = 20
 BATTERY_WARNING_TIME = 6000
 
@@ -461,7 +462,7 @@ Window {
             spacing: 16
             Text {
                 text: osd.label
-                width: 104
+                width: Math.max(104, implicitWidth)
                 color: "#dcdedf"
                 font.pixelSize: 20
                 anchors.verticalCenter: parent.verticalCenter
@@ -1819,8 +1820,9 @@ class BatteryWarning(threading.Thread):
         due = {level for level in BATTERY_WARN_LEVELS if pct <= level} - self.warned
         if due:
             self.warned |= due
-            log(f"battery low: {pct}%")
-            self.osd.show("Battery low", pct / 100, f"{pct}%", duration=BATTERY_WARNING_TIME)
+            label = "Battery critical" if pct <= BATTERY_CRITICAL else "Battery low"
+            log(f"{label.lower()}: {pct}%")
+            self.osd.show(label, pct / 100, f"{pct}%", duration=BATTERY_WARNING_TIME)
 
     def stop(self):
         self.stopped.set()

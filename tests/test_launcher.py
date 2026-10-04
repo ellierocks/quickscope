@@ -487,20 +487,23 @@ class Power(LauncherTestCase):
             self.l.write_file(os.path.join(bat, "status"), status + "\n")
 
         shown = []
-        osd = type("Osd", (), {"show": lambda _, *args, **kwargs: shown.append(args[2])})()
+        osd = type("Osd", (), {"show": lambda _, label, level, text, **kw: shown.append(f"{label} {text}")})()
         warning = self.l.BatteryWarning(osd)
-        for pct in (40, 11, 10, 9, 7):
+        for pct in (40, 21, 20, 19, 12):
             battery(pct)
             warning.check()
-        self.assertEqual(shown, ["10%"])
-        battery(3)  # past two levels at once (e.g. started low): one warning
+        self.assertEqual(shown, ["Battery low 20%"])
+        battery(9)  # crossed 10% between checks: shown as it is now
         warning.check()
-        self.assertEqual(shown, ["10%", "3%"])
-        battery(3, "Charging")  # plugged in, then unplugged again: warns again
+        battery(2)
         warning.check()
-        battery(3)
+        self.assertEqual(shown, ["Battery low 20%", "Battery low 9%", "Battery critical 2%"])
+        battery(2, "Charging")  # plugged in, then unplugged again: warns again
         warning.check()
-        self.assertEqual(shown, ["10%", "3%", "3%"])
+        battery(2)
+        warning.check()
+        self.assertEqual(shown[-1:], ["Battery critical 2%"])
+        self.assertEqual(len(shown), 4)
         self.l.POWER_SUPPLY_ROOT = os.path.join(self.home, "no-battery")  # e.g. a Steam Machine
         self.assertIsNone(self.l.battery_status())
 
