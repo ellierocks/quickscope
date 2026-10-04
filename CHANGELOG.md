@@ -2,6 +2,10 @@
 
 Releases before 1.0.0 were pre-releases, tested on a Steam Deck LCD.
 
+## 1.0.2
+
+- PyroWave and VRR no longer show up in the Moonlight settings with upstream Moonlight after switching back from Nonary's fork. Quickscope now checks the installed Moonlight itself instead of a setting the fork leaves behind.
+
 ## 1.0.1
 
 - Shorter, clearer descriptions in the panel and on the Moonlight settings page, and a more concise README.
