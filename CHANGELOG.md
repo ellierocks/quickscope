@@ -2,6 +2,10 @@
 
 Releases before 1.0.0 were pre-releases, tested on a Steam Deck LCD.
 
+## 1.0.1
+
+- Shorter, clearer descriptions in the panel and on the Moonlight settings page, and a more concise README.
+
 ## 1.0.0
 
 - First stable release.
