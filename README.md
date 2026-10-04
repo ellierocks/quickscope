@@ -87,6 +87,7 @@ Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quicksc
 There's no Quick Access menu outside Gaming Mode, so Quickscope adds its own controls:
 
 - **Brightness:** hold **…** and push the **left stick** up or down.
+- **Way out:** hold **…** on its own for 3 seconds to close the app and return to Gaming Mode, e.g. if it hangs.
 - **Volume:** the volume buttons work as usual, with an on-screen indicator.
 
 ## Troubleshooting

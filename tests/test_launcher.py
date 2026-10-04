@@ -893,6 +893,53 @@ class StreamLaunch(LauncherTestCase):
         self.assertEqual(closed, ["loading"])
 
 
+class Recovery(LauncherTestCase):
+    def test_launch_unit_hands_failures_to_recovery(self):
+        self.l.install_unit()
+        with open(os.path.join(self.l.UNIT_DIR, self.l.UNIT_NAME)) as f:
+            self.assertIn(f"OnFailure={self.l.RECOVER_UNIT_NAME}", f.read())
+        with open(os.path.join(self.l.UNIT_DIR, self.l.RECOVER_UNIT_NAME)) as f:
+            self.assertIn("--recover", f.read())
+        self.l.uninstall()
+        self.assertFalse(os.path.exists(os.path.join(self.l.UNIT_DIR, self.l.RECOVER_UNIT_NAME)))
+
+    def recover_with(self, returning):
+        calls = []
+        self.l.restore = lambda **kwargs: calls.append(("restore", kwargs.get("restart_shell")))
+        self.l.return_to_gaming = lambda: calls.append(("return",))
+        self.l.request_steam_shutdown = lambda: None
+        self.l.record_undo("return_to_gaming", returning)
+        self.l.recover()
+        return calls
+
+    def test_recovery_returns_to_gaming_mode(self):
+        self.assertEqual(self.recover_with(True), [("restore", False), ("return",)])
+
+    def test_recovery_leaves_a_usable_desktop_otherwise(self):
+        # No return: restore the Plasma panel, the minimal desktop has no way out.
+        self.assertEqual(self.recover_with(False), [("restore", True)])
+
+    def test_holding_the_button_closes_the_app(self):
+        class Proc:
+            pid, rc = 1, None
+
+            def poll(self):
+                return self.rc
+
+            def wait(self, timeout=None):
+                return self.rc
+
+        proc, closed = Proc(), []
+        real_popen = subprocess.Popen
+        self.addCleanup(setattr, subprocess, "Popen", real_popen)
+        subprocess.Popen = lambda *args, **kwargs: proc
+        self.l.close_app = lambda p: (closed.append(p), setattr(p, "rc", -15))
+        self.l.EXIT_REQUESTED.set()
+        self.addCleanup(self.l.EXIT_REQUESTED.clear)
+        self.l.run_direct({"command": "moonlight"})
+        self.assertEqual(closed, [proc])
+
+
 class Masking(LauncherTestCase):
     def test_restore_unmasks_in_one_call(self):
         # Each systemctl (un)mask reloads systemd, about half a second.

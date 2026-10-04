@@ -12,6 +12,7 @@ returns to Gaming Mode when the app exits.
   --displays   print the display an app would use and its modes, as JSON
   --moonlight-settings
                print Moonlight's current resolution, frame rate and sync settings
+  --recover    after the launcher died mid-session: restore and leave the session
   --diagnostics
                print a shareable report (personal details masked)
   --moonlight-hosts
@@ -32,6 +33,7 @@ import re
 import select
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -60,6 +62,7 @@ KWIN_OUTPUT_CONFIG = os.path.join(HOME, ".config", "kwinoutputconfig.json")
 ONESHOT_AUTOSTART = os.path.join(AUTOSTART_DIR, "quickscope-oneshot.desktop")
 UNIT_DIR = os.path.join(HOME, ".config", "systemd", "user")
 UNIT_NAME = "quickscope-launch.service"
+RECOVER_UNIT_NAME = "quickscope-recover.service"
 UNIT_TARGET = "plasma-core.target"
 PLASMASHELL_UNIT = "plasma-plasmashell.service"
 KWIN_SCRIPT_NAME = "quickscope-session"
@@ -111,6 +114,13 @@ COMBO_STICK_THRESHOLD = 20000
 COMBO_REPEAT_DELAY = 0.35
 COMBO_REPEAT_INTERVAL = 0.12
 COMBO_POLL = 0.02
+# Emergency exit: hold "…" alone this long to close the app and leave the
+# session (the minimal desktop has no other way out of a hung app).
+EXIT_HOLD = 3
+EXIT_HINT_AFTER = 1
+EXIT_REQUESTED = threading.Event()
+# After asking the app to close, how long before it's killed.
+APP_CLOSE_GRACE = 3
 
 # Quiet session: KDE's own background helpers are skipped for the launch
 # session. The user's own autostart apps and services (sync clients keeping
@@ -142,6 +152,9 @@ Description=Quickscope one-shot launch
 After=plasma-kwin_x11.service plasma-kwin_wayland.service
 PartOf=graphical-session.target
 ConditionPathExists={pending}
+# If the launcher itself dies, nothing would undo the session or leave it:
+# with no panel, there's no way out. Recovery does both.
+OnFailure={recover}
 
 [Service]
 ExecStart="{python}" "{launcher}"
@@ -151,6 +164,15 @@ KillMode=process
 
 [Install]
 WantedBy={target}
+"""
+
+RECOVER_UNIT_TEMPLATE = """\
+[Unit]
+Description=Quickscope recovery after the launcher died
+
+[Service]
+Type=oneshot
+ExecStart="{python}" "{launcher}" --recover
 """
 
 AUTOSTART_TEMPLATE = """\
@@ -791,6 +813,11 @@ def is_deck_state_report(report):
     return len(report) == 64 and report[0] == 1 and report[1] == 0 and report[2] == 9
 
 
+def combo_button_held(report):
+    byte, mask = COMBO_BUTTON
+    return bool(report[byte] & mask)
+
+
 def combo_direction(report):
     """+1/-1 while "…" is held with the left stick pushed up/down, else 0."""
     byte, mask = COMBO_BUTTON
@@ -826,6 +853,10 @@ class BrightnessCombo(threading.Thread):
             return
         log(f"brightness shortcut reading {node}")
         held, next_step = 0, 0.0
+        # Holding "…" alone is the way out: a stuck or hung app, or a session
+        # with no other exit. Moving the stick during the press (brightness)
+        # cancels it.
+        pressed_since, used_for_brightness, shown = None, False, -1
         try:
             # The controller reports ~250 times a second. Waking for each costs
             # about 1% of a core all session, so check every COMBO_POLL and
@@ -846,6 +877,20 @@ class BrightnessCombo(threading.Thread):
                     continue
                 direction = combo_direction(report)
                 now = time.monotonic()
+                if not combo_button_held(report):
+                    pressed_since, used_for_brightness, shown = None, False, -1
+                else:
+                    pressed_since = pressed_since or now
+                    used_for_brightness = used_for_brightness or bool(direction)
+                    held_for = now - pressed_since
+                    if not used_for_brightness and held_for >= EXIT_HINT_AFTER and not EXIT_REQUESTED.is_set():
+                        progress = min(1.0, (held_for - EXIT_HINT_AFTER) / (EXIT_HOLD - EXIT_HINT_AFTER))
+                        if self.osd and int(progress * 10) != shown:
+                            shown = int(progress * 10)
+                            self.osd.show("Hold to quit", progress, "")
+                        if held_for >= EXIT_HOLD:
+                            log('"…" held: closing the app')
+                            EXIT_REQUESTED.set()
                 if direction != held:
                     held = direction
                     if direction:
@@ -1644,7 +1689,15 @@ def restore(reload=True, restart_shell=False):
 
 def install_unit():
     unit_path = os.path.join(UNIT_DIR, UNIT_NAME)
-    write_file(unit_path, UNIT_TEMPLATE.format(pending=PENDING, python=python_exe(), launcher=SELF, target=UNIT_TARGET))
+    write_file(
+        unit_path,
+        UNIT_TEMPLATE.format(
+            pending=PENDING, python=python_exe(), launcher=SELF, target=UNIT_TARGET, recover=RECOVER_UNIT_NAME
+        ),
+    )
+    write_file(
+        os.path.join(UNIT_DIR, RECOVER_UNIT_NAME), RECOVER_UNIT_TEMPLATE.format(python=python_exe(), launcher=SELF)
+    )
     link = os.path.join(UNIT_DIR, f"{UNIT_TARGET}.wants", UNIT_NAME)
     os.makedirs(os.path.dirname(link), exist_ok=True)
     if os.path.lexists(link):
@@ -1978,15 +2031,35 @@ def run_direct(pending, background_steam=False, hold=None):
     output = (
         {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT, "text": True, "errors": "replace"} if watch else {}
     )
-    proc = subprocess.Popen(["bash", "-c", pending["command"]], cwd=cwd or HOME, **output)
+    # Its own process group, so a "…" hold can close the app and everything
+    # it started (Flatpak's wrappers included).
+    proc = subprocess.Popen(["bash", "-c", pending["command"]], cwd=cwd or HOME, start_new_session=True, **output)
     if watch:
         threading.Thread(target=watch_stream, args=(proc, hold, pending["stream"], started), daemon=True).start()
     if background_steam:
         # Give the app a head start on CPU and disk before Steam's heavy startup.
         time.sleep(HYBRID_STEAM_DELAY)
         start_background_steam()
+    while proc.poll() is None:
+        if EXIT_REQUESTED.wait(0.5):
+            close_app(proc)
+            break
     code = proc.wait()
     log(f"exited with {code} after {int(time.monotonic() - started)}s")
+
+
+def close_app(proc):
+    """SIGTERM the app's process group, then SIGKILL whatever ignores it."""
+    for sig, wait in ((signal.SIGTERM, APP_CLOSE_GRACE), (signal.SIGKILL, 2)):
+        try:
+            os.killpg(proc.pid, sig)
+        except (OSError, AttributeError):
+            return
+        try:
+            proc.wait(timeout=wait)
+            return
+        except subprocess.TimeoutExpired:
+            continue
 
 
 def steam_command(url=None):
@@ -2038,7 +2111,10 @@ def run_via_steam(pending, loading=None):
     misses = 0
     while misses < GONE_POLLS:
         misses = 0 if steam_game_running(appid) else misses + 1
-        time.sleep(POLL_INTERVAL)
+        if EXIT_REQUESTED.wait(POLL_INTERVAL):
+            # The game goes with the session on the way back.
+            log(f"leaving AppId={appid} running for the session to close")
+            return
     log(f"AppId={appid} exited")
 
 
@@ -2075,6 +2151,22 @@ def wait_for_steam_exit(requested):
     log("desktop Steam still running, returning anyway")
 
 
+def recover():
+    """Run by quickscope-recover.service when the launcher died mid-session:
+    undo the session's tweaks and leave it the way the launch would have."""
+    log("launcher ended unexpectedly; recovering")
+    returning = (read_json(UNDO) or {}).get("return_to_gaming", True)
+    # As on the normal way back: desktop Steam killed at logout would make
+    # Gaming Mode's Steam re-verify its install.
+    steam_shutdown = request_steam_shutdown() if returning else None
+    restore(reload=False, restart_shell=not returning)
+    if steam_shutdown:
+        wait_for_steam_exit(steam_shutdown)
+    if returning:
+        return_to_gaming()
+    return 0
+
+
 def return_to_gaming():
     # The screen goes black between KWin exiting (it clears the display as it
     # shuts down) and Steam's UI drawing in Gamescope, a few seconds later.
@@ -2097,6 +2189,8 @@ def launch():
         f"--- {pending.get('name')} ({pending.get('appid')}), mode={pending.get('mode')}, "
         f"session={os.environ.get('XDG_SESSION_TYPE', '?')}"
     )
+    # For recovery, should this launcher die: where the session should end up.
+    record_undo("return_to_gaming", bool(pending.get("return_to_gaming")))
 
     # KDE's power management sets its own brightness as the desktop starts.
     brightness_raw = pending.get("brightness_raw")
@@ -2308,6 +2402,7 @@ def uninstall():
     restore(reload=False)
     remove(os.path.join(UNIT_DIR, f"{UNIT_TARGET}.wants", UNIT_NAME))
     remove(os.path.join(UNIT_DIR, UNIT_NAME))
+    remove(os.path.join(UNIT_DIR, RECOVER_UNIT_NAME))
     systemctl("daemon-reload")
     keep = {LOG, WIFI_LOCK}
     for path in glob.glob(os.path.join(STATE, "*")):
@@ -2332,6 +2427,8 @@ def main(argv):
     if command == "--displays":
         print(json.dumps(display_info()))
         return 0
+    if command == "--recover":
+        return recover()
     if command == "--diagnostics":
         print(diagnostics())
         return 0
