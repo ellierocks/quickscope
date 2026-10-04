@@ -398,6 +398,32 @@ class Power(LauncherTestCase):
         keeper.stop()
         self.assertEqual(self.state["boost"], "disabled")
 
+    def test_battery_warns_once_per_level_while_discharging(self):
+        self.supplies(ACAD=("Mains", "0"), BAT1=("Battery", None))
+        bat = os.path.join(self.l.POWER_SUPPLY_ROOT, "BAT1")
+
+        def battery(pct, status="Discharging"):
+            self.l.write_file(os.path.join(bat, "capacity"), f"{pct}\n")
+            self.l.write_file(os.path.join(bat, "status"), status + "\n")
+
+        shown = []
+        osd = type("Osd", (), {"show": lambda _, *args, **kwargs: shown.append(args[2])})()
+        warning = self.l.BatteryWarning(osd)
+        for pct in (40, 11, 10, 9, 7):
+            battery(pct)
+            warning.check()
+        self.assertEqual(shown, ["10%"])
+        battery(3)  # past two levels at once (e.g. started low): one warning
+        warning.check()
+        self.assertEqual(shown, ["10%", "3%"])
+        battery(3, "Charging")  # plugged in, then unplugged again: warns again
+        warning.check()
+        battery(3)
+        warning.check()
+        self.assertEqual(shown, ["10%", "3%", "3%"])
+        self.l.POWER_SUPPLY_ROOT = os.path.join(self.home, "no-battery")  # e.g. a Steam Machine
+        self.assertIsNone(self.l.battery_status())
+
     def test_keeper_rechecks_wifi_only_after_the_link_changes(self):
         changes = os.path.join(self.l.SYSFS_ROOT, "class/net/wlan0/carrier_changes")
         self.l.write_file(os.path.join(self.l.SYSFS_ROOT, "class/net/wlan0/wireless/.keep"), "")
@@ -855,6 +881,7 @@ class Volume(LauncherTestCase):
     def test_osd_server_answers_only_when_something_changes(self):
         osd = self.l.Osd()
         osd.server = osd.serve()
+        self.addCleanup(osd.server.server_close)
         self.addCleanup(osd.server.shutdown)
         url = f"http://127.0.0.1:{osd.server.server_address[1]}/"
         results = []
@@ -869,7 +896,7 @@ class Volume(LauncherTestCase):
         self.assertTrue(waiting.is_alive())  # nothing new yet: still waiting
         osd.show("Volume", 0.5, "50%")
         waiting.join(2)
-        self.assertEqual(results, [{"seq": 1, "label": "Volume", "level": 0.5, "text": "50%"}])
+        self.assertEqual(results, [{"seq": 1, "label": "Volume", "level": 0.5, "text": "50%", "duration": 1500}])
         fetch(0)  # behind: answered at once
         self.assertEqual(results[-1]["seq"], 1)
 

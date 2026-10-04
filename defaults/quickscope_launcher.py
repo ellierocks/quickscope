@@ -52,6 +52,8 @@ BACKLIGHT_ROOT = "/sys/class/backlight"
 SYSFS_ROOT = "/sys"
 # The overlay's request waits at most this long for something to show.
 OSD_POLL_TIMEOUT = 300
+# How long the overlay stays up after a change, in milliseconds.
+OSD_SHOW_TIME = 1500
 LOADING_SCREEN = os.path.join(STATE, "loading.qml")
 LOADING_STATUS = os.path.join(STATE, "loading.txt")
 # Kept apart from undo.json: unlocking needs the desktop session's permissions,
@@ -98,6 +100,12 @@ POWER_PROFILES = {
 # "auto" picks one of these by power source, and follows it while running.
 AUTO_PROFILES = {"plugged_in": "performance", "on_battery": "battery"}
 POWER_SUPPLY_ROOT = "/sys/class/power_supply"
+# Low-battery warnings on the OSD, in percent, checked every BATTERY_POLL
+# seconds (about 1% of a Deck's battery while streaming) and shown for
+# BATTERY_WARNING_TIME milliseconds.
+BATTERY_WARN_LEVELS = (10, 5)
+BATTERY_POLL = 20
+BATTERY_WARNING_TIME = 6000
 
 # Steam's brightness slider drives the backlight through roughly this curve
 # (measured on a Deck LCD: 48% -> 26% of the backlight's range, 100% -> max).
@@ -484,6 +492,7 @@ Window {
                 osd.level = s.level;
                 osd.valueText = s.text;
                 osd.visible = true;
+                hide.interval = s.duration;
                 hide.restart();
             }
             osd.poll();
@@ -737,7 +746,7 @@ class Osd:
     def __init__(self):
         self.proc = None
         self.server = None
-        self.state = {"seq": 0, "label": "", "level": 0, "text": ""}
+        self.state = {"seq": 0, "label": "", "level": 0, "text": "", "duration": OSD_SHOW_TIME}
         self.changed = threading.Condition()
 
     def start(self):
@@ -789,9 +798,10 @@ class Osd:
         threading.Thread(target=server.serve_forever, daemon=True).start()
         return server
 
-    def show(self, label, level, text):
+    def show(self, label, level, text, duration=OSD_SHOW_TIME):
         with self.changed:
             self.state = {"seq": self.state["seq"] + 1, "label": label, "level": level, "text": text}
+            self.state["duration"] = duration
             self.changed.notify_all()
 
     def stop(self):
@@ -799,6 +809,7 @@ class Osd:
             self.proc.terminate()
         if self.server:
             self.server.shutdown()
+            self.server.server_close()
 
 
 class VolumeWatcher:
@@ -1745,6 +1756,50 @@ def plugged_in():
     return not has_battery
 
 
+def battery_status():
+    """(percent, discharging) of the first battery, or None without one."""
+    for supply in sorted(glob.glob(os.path.join(POWER_SUPPLY_ROOT, "*"))):
+        if read_text(os.path.join(supply, "type")) != "Battery":
+            continue
+        capacity = read_text(os.path.join(supply, "capacity"))
+        if capacity and capacity.isdigit():
+            return int(capacity), read_text(os.path.join(supply, "status")) == "Discharging"
+    return None
+
+
+class BatteryWarning(threading.Thread):
+    """Warns on the OSD as the battery runs low. Gaming Mode does, but nothing
+    in the session would: KDE's warning is a notification, and there's no
+    Plasma shell to show it. Each level warns once per discharge."""
+
+    def __init__(self, osd):
+        super().__init__(daemon=True)
+        self.osd = osd
+        self.warned = set()
+        self.stopped = threading.Event()
+
+    def run(self):
+        while not self.stopped.wait(BATTERY_POLL):
+            self.check()
+
+    def check(self):
+        status = battery_status()
+        if not status:
+            return
+        pct, discharging = status
+        if not discharging:
+            self.warned.clear()
+            return
+        due = {level for level in BATTERY_WARN_LEVELS if pct <= level} - self.warned
+        if due:
+            self.warned |= due
+            log(f"battery low: {pct}%")
+            self.osd.show("Battery low", pct / 100, f"{pct}%", duration=BATTERY_WARNING_TIME)
+
+    def stop(self):
+        self.stopped.set()
+
+
 def resolve_power_profile(name):
     if name == "auto":
         return AUTO_PROFILES["plugged_in" if plugged_in() else "on_battery"]
@@ -2506,6 +2561,9 @@ def launch():
         volume = None
     combo = BrightnessCombo(osd, keeper)
     combo.start()
+    battery = BatteryWarning(osd) if osd and battery_status() else None
+    if battery:
+        battery.start()
     returning = pending.get("return_to_gaming")
     if hold and "network" in hold.reasons:
         # Desktop Steam restarts NetworkManager (wpa_supplicant); otherwise
@@ -2528,6 +2586,8 @@ def launch():
             show_loading_screen("Returning to Gaming Mode…", still=True)
         steam_shutdown = request_steam_shutdown() if returning else None
         combo.stop()
+        if battery:
+            battery.stop()
         if volume:
             volume.stop()
         if osd:
