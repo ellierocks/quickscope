@@ -761,10 +761,24 @@ class Volume(LauncherTestCase):
             "title": '"t"',
             "message": '"Starting…"',
             "status_url": '"file:///x"',
+            "spinner": "true",
         }
         self.assertNotIn("%(", qml)
         # Self-drawn spinner: nothing from the desktop theme.
         self.assertNotIn("QtQuick.Controls", qml)
+
+    def test_returning_screen_is_still(self):
+        real_which, real_popen = shutil.which, subprocess.Popen
+        self.addCleanup(setattr, shutil, "which", real_which)
+        self.addCleanup(setattr, subprocess, "Popen", real_popen)
+        shutil.which = lambda name: "/usr/bin/qml6" if name == "qml6" else None
+        subprocess.Popen = lambda *args, **kwargs: None
+        self.l.show_loading_screen("Returning…", still=True)
+        with open(self.l.LOADING_SCREEN) as f:
+            qml = f.read()
+        # It may stay frozen on screen: no spinner stopped mid-turn.
+        self.assertIn("visible: false", qml)
+        self.assertIn("visible: !false", qml)
 
     def test_osd_qml_is_filled_in(self):
         qml = self.l.OSD_QML % {"title": '"t"', "state_url": '"file:///x"'}

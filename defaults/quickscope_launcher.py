@@ -306,6 +306,7 @@ Window {
         Item {
             width: 48
             height: 48
+            visible: %(spinner)s
             anchors.horizontalCenter: parent.horizontalCenter
             Canvas {
                 anchors.fill: parent
@@ -338,6 +339,16 @@ Window {
             text: %(message)s
             color: "#d0d0d0"
             font.pixelSize: 26
+            anchors.horizontalCenter: parent.horizontalCenter
+        }
+        // The still version: an underline instead of the spinner, for a screen
+        // that may stay frozen on display through the switch back.
+        Rectangle {
+            visible: !%(spinner)s
+            width: 64
+            height: 4
+            radius: 2
+            color: "#1a9fff"
             anchors.horizontalCenter: parent.horizontalCenter
         }
     }
@@ -1876,8 +1887,12 @@ def load_session_script(force_fullscreen, loading, minimize_steam_windows=False,
     return False
 
 
-def show_loading_screen(message):
-    """A full-screen loading screen with `message`. Returns the process or None."""
+def show_loading_screen(message, still=False):
+    """A full-screen loading screen with `message`. Returns the process or None.
+
+    `still` swaps the spinner for an underline: the returning screen can stay
+    frozen on display after KWin exits (whether it does varies), and a spinner
+    stopped mid-turn would look like a hang."""
     qml = shutil.which("qml6") or shutil.which("qml")
     if not qml:
         log("no qml runtime, skipping loading screen")
@@ -1887,6 +1902,7 @@ def show_loading_screen(message):
         "title": json.dumps(LOADING_TITLE),
         "message": json.dumps(message),
         "status_url": json.dumps("file://" + LOADING_STATUS),
+        "spinner": "false" if still else "true",
     }
     write_file(LOADING_SCREEN, screen)
     env = dict(os.environ, QML_XHR_ALLOW_FILE_READ="1")
@@ -2182,7 +2198,7 @@ def launch():
         close_loading_screen(loading)
         if returning:
             # Covers the clean-up and logout; the logout closes it.
-            show_loading_screen("Returning to Gaming Mode…")
+            show_loading_screen("Returning to Gaming Mode…", still=True)
         steam_shutdown = request_steam_shutdown() if returning else None
         combo.stop()
         if volume:
