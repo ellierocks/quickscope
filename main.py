@@ -37,6 +37,10 @@ SETTINGS_DEFAULTS = {
     "display_hdr": False,
     # Percent; KDE would otherwise pick its own (170% on a 4K TV).
     "display_scale": 100,
+    # KDE's idle timers for the session, in minutes: 0 never, -1 SteamOS's own
+    # (on battery: screen off after 1 minute, sleep after 5).
+    "idle_sleep_min": -1,
+    "idle_screen_off_min": -1,
     # Opt-in: Moonlight settings per display ({display id: profile}), swapped
     # into Moonlight.conf for the session. Off unless the user turns it on.
     "moonlight_override": False,
@@ -202,7 +206,7 @@ def _clean_moonlight_profile(profile):
     if profile.get("bitrate") is not None:
         # kbps, up to the VRR fork's PyroWave maximum.
         clean["bitrate"] = max(500, min(3000000, int(profile["bitrate"])))
-    for field in ("hdr", "yuv444", "stats", "auto_bitrate"):
+    for field in ("hdr", "yuv444", "stats", "keep_awake", "auto_bitrate"):
         if profile.get(field) is not None:
             clean[field] = bool(profile[field])
     if profile.get("codec") is not None and int(profile["codec"]) in MOONLIGHT_CODECS:
@@ -399,6 +403,8 @@ class Plugin:
             value = max(5, min(100, int(value)))
         elif key == "display_scale":
             value = max(100, min(300, int(value)))
+        elif key in ("idle_sleep_min", "idle_screen_off_min"):
+            value = max(-1, min(240, int(value)))
         elif key == "moonlight_profiles":
             value = {
                 str(k): _clean_moonlight_profile(p) for k, p in value.items() if re.fullmatch(r"[\w.-]{1,40}", str(k))
@@ -524,6 +530,8 @@ class Plugin:
                 "return_to_gaming": s["return_to_gaming"],
                 "force_fullscreen": s["force_fullscreen"],
                 "reconnect_streams": s["reconnect_streams"],
+                "idle_sleep_min": s["idle_sleep_min"],
+                "idle_screen_off_min": s["idle_screen_off_min"],
                 "power_profile": s["power_profile"],
                 "wifi_powersave_off": s["wifi_powersave_off"],
                 "wifi_lock_ap": s["wifi_lock_ap"],

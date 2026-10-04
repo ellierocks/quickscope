@@ -4,6 +4,9 @@ export interface Settings {
   return_to_gaming: boolean;
   force_fullscreen: boolean;
   reconnect_streams: boolean;
+  /** KDE's idle timers for the session, minutes: 0 never, -1 SteamOS's own. */
+  idle_sleep_min: number;
+  idle_screen_off_min: number;
   power_profile: PowerProfile;
   wifi_powersave_off: boolean;
   wifi_lock_ap: boolean;
@@ -80,6 +83,8 @@ export interface MoonlightProfile {
   yuv444?: boolean;
   /** Moonlight's performance stats overlay. */
   stats?: boolean;
+  /** Moonlight keeps the screen on and the Deck awake while it runs. */
+  keep_awake?: boolean;
   /** Nonary's VRR fork only. */
   vrr?: boolean;
   /** Whether the display supported VRR when the profile was made. */
@@ -98,6 +103,7 @@ export type MoonlightSettings = Record<
   | "codec"
   | "yuv444"
   | "stats"
+  | "keep_awake"
   | "vrr"
   | "auto_bitrate",
   string | null

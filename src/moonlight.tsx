@@ -72,6 +72,7 @@ function profileFrom(display: DisplayInfo, current: MoonlightSettings | null): M
     codec: num(current?.codec, 0),
     yuv444: bool(current?.yuv444, false),
     stats: bool(current?.stats, false),
+    keep_awake: bool(current?.keep_awake, true),
     // Moonlight keeps its bitrate at the default until it's moved by hand.
     auto_bitrate: bool(current?.auto_bitrate, true),
     vrr_capable: display.vrr_capable,
@@ -112,6 +113,7 @@ function ProfileEditor({
   const hdr = profile.hdr ?? bool(current?.hdr, false);
   const yuv444 = profile.yuv444 ?? bool(current?.yuv444, false);
   const stats = profile.stats ?? bool(current?.stats, false);
+  const keepAwake = profile.keep_awake ?? bool(current?.keep_awake, true);
   const autoBitrate = !!profile.auto_bitrate;
   const codecs = fork ? [...CODECS, PYROWAVE] : CODECS;
   let codec = profile.codec ?? num(current?.codec, 0);
@@ -132,6 +134,7 @@ function ProfileEditor({
       codec,
       yuv444,
       stats,
+      keep_awake: keepAwake,
       auto_bitrate: autoBitrate,
       ...(fork && vrrCapable ? { vrr } : {}),
       ...patch,
@@ -258,6 +261,12 @@ function ProfileEditor({
         checked={stats}
         onChange={(on) => change({ stats: on })}
       />
+      <ToggleField
+        label="Keep the screen awake"
+        description="While streaming, the screen stays on and the Deck doesn't sleep, whatever Quickscope's idle settings say."
+        checked={keepAwake}
+        onChange={(on) => change({ keep_awake: on })}
+      />
     </>
   );
 }
@@ -279,7 +288,7 @@ function MoonlightPage() {
   useEffect(() => {
     if (!settings || !current) return;
     const profiles = settings.moonlight_profiles;
-    const fields = ["bitrate", "hdr", "codec", "yuv444", "stats", "auto_bitrate"] as const;
+    const fields = ["bitrate", "hdr", "codec", "yuv444", "stats", "keep_awake", "auto_bitrate"] as const;
     const incomplete = Object.keys(profiles).filter((id) => fields.some((f) => profiles[id][f] === undefined));
     if (incomplete.length === 0) return;
     const next = { ...profiles };
@@ -291,6 +300,7 @@ function MoonlightPage() {
         codec: next[id].codec ?? num(current.codec, 0),
         yuv444: next[id].yuv444 ?? bool(current.yuv444, false),
         stats: next[id].stats ?? bool(current.stats, false),
+        keep_awake: next[id].keep_awake ?? bool(current.keep_awake, true),
         auto_bitrate: next[id].auto_bitrate ?? false,
       };
     }

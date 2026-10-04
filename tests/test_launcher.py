@@ -133,6 +133,37 @@ class Splash(LauncherTestCase):
         self.l.restore(reload=False)
         self.assertEqual(stored, {"Engine": "KSplashQML"})
 
+    def test_idle_settings_are_session_only(self):
+        calls = []
+        self.l.run = lambda cmd: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "")
+        self.l.kconfig_tool = lambda kind: f"k{kind}config6"
+        self.l.override_idle({"idle_sleep_min": 10, "idle_screen_off_min": 0})
+        written = {(c[4], c[6], c[8]): c[9] for c in calls}
+        self.assertEqual(written[("Battery", "SuspendAndShutdown", "AutoSuspendAction")], "1")
+        self.assertEqual(written[("AC", "SuspendAndShutdown", "AutoSuspendIdleTimeoutSec")], "600")
+        self.assertEqual(written[("LowBattery", "Display", "TurnOffDisplayWhenIdle")], "false")
+        self.assertNotIn(("Battery", "Display", "TurnOffDisplayIdleTimeoutSec"), written)
+        self.l.write_file(self.l.POWERDEVILRC, "[Battery][SuspendAndShutdown]\n")  # what kwriteconfig6 made
+        self.l.restore(reload=False)
+        self.assertFalse(os.path.exists(self.l.POWERDEVILRC))
+
+    def test_users_own_powerdevilrc_is_put_back(self):
+        self.l.run = lambda cmd: subprocess.CompletedProcess(cmd, 0, "")
+        self.l.kconfig_tool = lambda kind: f"k{kind}config6"
+        self.l.write_file(self.l.POWERDEVILRC, "[AC][Display]\nTurnOffDisplayIdleTimeoutSec=900\n")
+        self.l.override_idle({"idle_sleep_min": 0})
+        self.l.write_file(self.l.POWERDEVILRC, "changed by the session")
+        self.l.restore(reload=False)
+        with open(self.l.POWERDEVILRC) as f:
+            self.assertEqual(f.read(), "[AC][Display]\nTurnOffDisplayIdleTimeoutSec=900\n")
+
+    def test_steamos_idle_defaults_leave_powerdevilrc_alone(self):
+        calls = []
+        self.l.run = calls.append
+        self.l.override_idle({"idle_sleep_min": -1, "idle_screen_off_min": -1})
+        self.l.override_idle({})
+        self.assertEqual(calls, [])
+
     def test_already_off_is_left_alone(self):
         stored = {"Engine": "none"}
         calls = self.fake_kconfig(stored)

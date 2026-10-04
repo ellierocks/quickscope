@@ -63,6 +63,9 @@ SELF = os.path.abspath(__file__)
 
 AUTOSTART_DIR = os.path.join(HOME, ".config", "autostart")
 KSPLASHRC = os.path.join(HOME, ".config", "ksplashrc")
+# KDE's power management (idle timers), and its per-power-state profiles.
+POWERDEVILRC = os.path.join(HOME, ".config", "powerdevilrc")
+POWERDEVIL_PROFILES = ("AC", "Battery", "LowBattery")
 KWIN_OUTPUT_CONFIG = os.path.join(HOME, ".config", "kwinoutputconfig.json")
 ONESHOT_AUTOSTART = os.path.join(AUTOSTART_DIR, "quickscope-oneshot.desktop")
 UNIT_DIR = os.path.join(HOME, ".config", "systemd", "user")
@@ -1488,6 +1491,7 @@ MOONLIGHT_KEYS = {
     "codec": "videocfg",
     "yuv444": "yuv444",
     "stats": "showperfoverlay",
+    "keep_awake": "keepawake",
     # Nonary's VRR fork only.
     "vrr": "enablevrr",
 }
@@ -1876,6 +1880,8 @@ def restore(reload=True, restart_shell=False):
         systemctl("start", "--no-block", PLASMASHELL_UNIT)
     if "splash_engine" in undo:
         restore_splash(undo["splash_engine"])
+    if "powerdevil" in undo:
+        restore_idle(undo["powerdevil"])
     unlock_access_point()
     if "moonlight" in undo:
         restore_moonlight(undo["moonlight"])
@@ -2016,6 +2022,54 @@ def restore_splash(undo):
     log(f"restored splash Engine {original!r}")
 
 
+def idle_overrides(pending):
+    """powerdevilrc values for the idle settings, as (profile, group, key,
+    value). Minutes; 0 is never, None (or a negative) leaves SteamOS's own:
+    on battery, screen off after 1 minute and sleep after 5."""
+    values = []
+    sleep, screen = pending.get("idle_sleep_min"), pending.get("idle_screen_off_min")
+    for profile in POWERDEVIL_PROFILES:
+        if sleep is not None and sleep >= 0:
+            values.append((profile, "SuspendAndShutdown", "AutoSuspendAction", "1" if sleep else "0"))
+            if sleep:
+                values.append((profile, "SuspendAndShutdown", "AutoSuspendIdleTimeoutSec", str(sleep * 60)))
+        if screen is not None and screen >= 0:
+            values.append((profile, "Display", "TurnOffDisplayWhenIdle", "true" if screen else "false"))
+            if screen:
+                values.append((profile, "Display", "TurnOffDisplayIdleTimeoutSec", str(screen * 60)))
+    return values
+
+
+def override_idle(pending):
+    """Set KDE's idle timers for this session only, before Plasma starts and
+    reads them. The user's own powerdevilrc (if any) is put back afterwards."""
+    values = idle_overrides(pending)
+    if not values:
+        return
+    write = kconfig_tool("write")
+    if not write:
+        log("kwriteconfig not found, leaving KDE's idle settings alone")
+        return
+    backup = None
+    if os.path.exists(POWERDEVILRC):
+        backup = POWERDEVILRC + ".quickscope-bak"
+        shutil.copyfile(POWERDEVILRC, backup)
+    record_undo("powerdevil", {"backup": backup})
+    for profile, group, key, value in values:
+        run([write, "--file", "powerdevilrc", "--group", profile, "--group", group, "--key", key, value])
+    sleep, screen = pending.get("idle_sleep_min"), pending.get("idle_screen_off_min")
+    log(f"idle settings for this session (minutes, 0 never): sleep {sleep}, screen off {screen}")
+
+
+def restore_idle(undo):
+    backup = undo.get("backup")
+    if backup and os.path.exists(backup):
+        os.replace(backup, POWERDEVILRC)
+    else:
+        remove(POWERDEVILRC)  # created just for this session
+    log("restored KDE's idle settings")
+
+
 def choose_brightness(pending):
     """Decide the session's starting brightness while still in Gaming Mode,
     where the backlight is at the level the user chose there."""
@@ -2053,6 +2107,7 @@ def prepare():
     # The splash waits for the Plasma panel, which the session skips, so it
     # would sit there until it times out.
     disable_splash()
+    override_idle(pending)
 
     choose_brightness(pending)
     # Read once: modetest is on the launch path.

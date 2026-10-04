@@ -52,6 +52,14 @@ const POWER_PROFILES: { data: PowerProfile; label: string; description: string }
   },
 ];
 
+// KDE's idle timers, in minutes. -1 leaves SteamOS's own settings.
+const IDLE_MINUTES = [1, 2, 5, 10, 15, 30];
+const idleOptions = (steamosDefault: string) => [
+  { data: -1, label: `SteamOS default (${steamosDefault})` },
+  { data: 0, label: "Never" },
+  ...IDLE_MINUTES.map((m) => ({ data: m, label: m === 1 ? "1 minute" : `${m} minutes` })),
+];
+
 function modeLabel(mode: string): string {
   const m = mode.match(/^(\d+)x(\d+)@([\d.]+)$/);
   if (!m) return mode;
@@ -421,6 +429,23 @@ function Content() {
             rgOptions={POWER_PROFILES.map(({ data, label }) => ({ data, label }))}
             selectedOption={settings.power_profile}
             onChange={(o) => update("power_profile", o.data)}
+          />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <DropdownItem
+            label="Sleep when idle"
+            description="After this long without touch, keyboard or mouse input. Moonlight keeps the Deck awake while streaming, unless its Keep the screen awake setting is off."
+            rgOptions={idleOptions("5 minutes on battery")}
+            selectedOption={settings.idle_sleep_min}
+            onChange={(o) => update("idle_sleep_min", o.data)}
+          />
+        </PanelSectionRow>
+        <PanelSectionRow>
+          <DropdownItem
+            label="Turn off screen when idle"
+            rgOptions={idleOptions("1 minute on battery")}
+            selectedOption={settings.idle_screen_off_min}
+            onChange={(o) => update("idle_screen_off_min", o.data)}
           />
         </PanelSectionRow>
         <PanelSectionRow>
