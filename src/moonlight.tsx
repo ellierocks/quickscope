@@ -320,7 +320,7 @@ function MoonlightPage() {
     <div style={{ marginTop: "40px", height: "calc(100% - 80px)", overflowY: "auto" }}>
       {/* Inset and centred like Steam's own settings pages. DialogBody scrolls
           by itself too; only the outer box should. */}
-      <DialogBody style={{ maxWidth: "900px", margin: "0 auto", padding: "16px 2.8vw 24px", overflow: "visible" }}>
+      <DialogBody style={{ maxWidth: "900px", margin: "0 auto", padding: "32px 2.8vw 56px", overflow: "visible" }}>
         <DialogControlsSection>
           <DialogControlsSectionHeader>Moonlight</DialogControlsSectionHeader>
           <ToggleField
