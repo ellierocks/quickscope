@@ -317,10 +317,21 @@ function MoonlightPage() {
   return (
     // Scrolls between Steam's top bar and its button bar (40px each); anything
     // under the button bar would count as on screen and never scroll into view.
-    <div style={{ marginTop: "40px", height: "calc(100% - 80px)", overflowY: "auto" }}>
+    // scroll-padding keeps the first and last rows clear of the bars when
+    // controller focus scrolls them into view (Steam's focus scrolling
+    // honours it); it matches the body's own padding.
+    <div
+      style={{
+        marginTop: "40px",
+        height: "calc(100% - 80px)",
+        overflowY: "auto",
+        scrollPaddingTop: "32px",
+        scrollPaddingBottom: "24px",
+      }}
+    >
       {/* Inset and centred like Steam's own settings pages. DialogBody scrolls
           by itself too; only the outer box should. */}
-      <DialogBody style={{ maxWidth: "900px", margin: "0 auto", padding: "32px 2.8vw 56px", overflow: "visible" }}>
+      <DialogBody style={{ maxWidth: "900px", margin: "0 auto", padding: "32px 2.8vw 24px", overflow: "visible" }}>
         <DialogControlsSection>
           <DialogControlsSectionHeader>Moonlight</DialogControlsSectionHeader>
           <ToggleField
