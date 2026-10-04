@@ -2,7 +2,7 @@
 
 All releases so far are pre-releases, tested on a Steam Deck LCD.
 
-## 0.9.0 (unreleased)
+## 0.9.0
 
 - **Ways out of a stuck session:** hold **…** for 3 seconds to close the app and return to Gaming Mode. If the launcher itself crashes, a recovery job undoes the session and returns.
 - **Faster:** preparation and the return's clean-up are about a second shorter each (one `systemctl` call instead of three). Gamescope's own process is killed 0.3 s into its shutdown, so it can no longer hang or abort with a crash dump on the way out.
