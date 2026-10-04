@@ -1511,9 +1511,12 @@ MOONLIGHT_KEYS = {
     # Nonary's VRR fork only.
     "vrr": "enablevrr",
 }
-# Only Nonary's VRR fork saves this key.
+# Only Nonary's VRR fork saves this key, but upstream Moonlight keeps it after
+# switching back, so it only counts when there's no binary to look at.
 MOONLIGHT_FORK_KEY = "enablevrr"
 MOONLIGHT_PYROWAVE = 5
+# User installation first, as `flatpak run` picks it.
+FLATPAK_DIRS = (os.path.join(HOME, ".local", "share", "flatpak"), "/var/lib/flatpak")
 
 # Moonlight's getDefaultBitrate(): (pixels, factor) points, interpolated.
 MOONLIGHT_BITRATE_TABLE = (
@@ -1572,6 +1575,33 @@ def moonlight_conf(pending=None):
     if command and MOONLIGHT_FLATPAK not in command and os.path.exists(native):
         return native
     return flatpak if os.path.exists(flatpak) or not os.path.exists(native) else native
+
+
+def moonlight_binary(pending=None):
+    """The Moonlight binary that goes with moonlight_conf(), None if not found
+    (an AppImage, say)."""
+    if moonlight_conf(pending) == os.path.join(HOME, ".config", MOONLIGHT_CONF_NAME):
+        return shutil.which("moonlight")
+    for root in FLATPAK_DIRS:
+        path = os.path.join(root, "app", MOONLIGHT_FLATPAK, "current", "active", "files", "bin", "moonlight")
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def moonlight_fork(pending=None, conf=None):
+    """Whether Nonary's fork is installed: its binary knows PyroWave. Without
+    a binary, whether the settings have the fork's key."""
+    binary = moonlight_binary(pending)
+    if binary:
+        try:
+            with open(binary, "rb") as f:
+                return b"pyrowave" in f.read().lower()
+        except OSError:
+            pass
+    if conf is None:
+        conf = read_ini_section(moonlight_conf(pending)) or {}
+    return MOONLIGHT_FORK_KEY in conf
 
 
 def is_moonlight(pending):
@@ -1647,7 +1677,7 @@ def override_moonlight(pending, info):
         log(f"Moonlight's settings not found at {path}")
         return
     wanted = moonlight_values(profile)
-    if MOONLIGHT_FORK_KEY not in original:
+    if not moonlight_fork(pending, original):
         # Upstream Moonlight: no VRR, no PyroWave, whatever the profile says.
         wanted.pop(MOONLIGHT_KEYS["vrr"], None)
         if wanted.get(MOONLIGHT_KEYS["codec"]) == str(MOONLIGHT_PYROWAVE):
@@ -2920,7 +2950,7 @@ def diagnostics():
     lines.append(
         f"Moonlight: Flatpak {'installed' if installed else 'not installed'}, "
         f"last run {versions[-1] if versions else 'unknown'}, "
-        f"Nonary's VRR fork: {'yes' if MOONLIGHT_FORK_KEY in conf else 'no'}"
+        f"Nonary's VRR fork: {'yes' if moonlight_fork(conf=conf) else 'no'}"
     )
     try:
         with open(LOG) as f:
@@ -2980,7 +3010,7 @@ def main(argv):
     if command == "--moonlight-settings":
         current = read_ini_section(moonlight_conf()) or {}
         values = {field: current.get(key) for field, key in MOONLIGHT_KEYS.items()}
-        values["vrr_fork"] = MOONLIGHT_FORK_KEY in current
+        values["vrr_fork"] = moonlight_fork(conf=current)
         values["auto_bitrate"] = current.get("autoadjustbitrate")
         print(json.dumps(values))
         return 0

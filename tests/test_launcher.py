@@ -802,6 +802,9 @@ class Moonlight(LauncherTestCase):
             "Moonlight.conf",
         )
         self.l.write_file(self.conf, MOONLIGHT_CONF)
+        # Never the real system's Moonlight.
+        self.flatpak = os.path.join(self.home, "flatpak")
+        self.l.FLATPAK_DIRS = (self.flatpak,)
         self.pending = {
             "command": "/usr/bin/flatpak run com.moonlight_stream.Moonlight",
             "moonlight_override": True,
@@ -863,6 +866,22 @@ class Moonlight(LauncherTestCase):
         self.l.override_moonlight(self.pending, self.l.display_info())
         values = self.conf_values()
         self.assertEqual((values["enablevrr"], values["videocfg"]), ("true", "5"))
+
+    def test_fork_is_told_by_its_binary_not_a_leftover_key(self):
+        binary = os.path.join(
+            self.flatpak, "app", "com.moonlight_stream.Moonlight", "current", "active", "files", "bin", "moonlight"
+        )
+        # Back on upstream Moonlight, the fork's key is still in the settings.
+        self.l.write_ini_values(self.conf, {"enablevrr": "false"})
+        self.l.write_file(binary, "\x7fELF ... H.264 HEVC AV1")
+        self.assertFalse(self.l.moonlight_fork())
+        profile = self.pending["moonlight_profiles"]["SAM-71B5"]
+        profile.update(codec=5, vrr=True)
+        self.l.override_moonlight(self.pending, self.l.display_info())
+        self.assertNotIn("videocfg", self.conf_values())
+        self.l.restore(reload=False)
+        self.l.write_file(binary, "\x7fELF ... PyroWave decoding")
+        self.assertTrue(self.l.moonlight_fork())
 
     def test_default_bitrate_matches_moonlight(self):
         f = self.l.moonlight_default_bitrate
