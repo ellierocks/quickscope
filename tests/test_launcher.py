@@ -879,6 +879,17 @@ class StreamLaunch(LauncherTestCase):
         self.assertEqual(closed, ["loading"])
 
 
+class Masking(LauncherTestCase):
+    def test_restore_unmasks_in_one_call(self):
+        # Each systemctl (un)mask reloads systemd, about half a second.
+        calls = []
+        self.l.systemctl = lambda *args: calls.append(args) or subprocess.CompletedProcess(args, 0, "")
+        units = [self.l.PLASMASHELL_UNIT, *self.l.QUIET_MASKED_UNITS]
+        self.l.record_undo("masked", units)
+        self.l.restore(reload=False)
+        self.assertEqual([c for c in calls if c[0] == "unmask"], [("unmask", "--runtime", *units)])
+
+
 class Diagnostics(LauncherTestCase):
     def test_redacts_addresses_and_wifi_names(self):
         text = (

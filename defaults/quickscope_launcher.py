@@ -1600,11 +1600,14 @@ def restore(reload=True, restart_shell=False):
         if entry.get("backup") and os.path.exists(entry["backup"]):
             os.replace(entry["backup"], entry["path"])
         log(f"restored {entry['path']}")
-    for unit in undo.get("masked", []):
-        if not succeeded(systemctl("unmask", "--runtime", unit)):
-            log(f"failed to unmask {unit}")
-        elif restart_shell and unit == PLASMASHELL_UNIT:
-            systemctl("start", "--no-block", unit)
+    masked = undo.get("masked", [])
+    # One call (one systemd reload) for all of them, unit by unit only if that fails.
+    if masked and not succeeded(systemctl("unmask", "--runtime", *masked)):
+        for unit in masked:
+            if not succeeded(systemctl("unmask", "--runtime", unit)):
+                log(f"failed to unmask {unit}")
+    if restart_shell and PLASMASHELL_UNIT in masked:
+        systemctl("start", "--no-block", PLASMASHELL_UNIT)
     if "splash_engine" in undo:
         restore_splash(undo["splash_engine"])
     unlock_access_point()
@@ -1783,19 +1786,21 @@ def prepare():
     choose_display(pending, display)
     override_moonlight(pending, display)
 
-    masked = []
-    for unit in [PLASMASHELL_UNIT, *QUIET_MASKED_UNITS]:
-        if succeeded(systemctl("mask", "--runtime", unit)):
-            masked.append(unit)
-            record_undo("masked", masked)
-            log(f"masked {unit} for this session")
-        else:
-            log(f"failed to mask {unit}")
-
-    reload = systemctl("daemon-reload")
-    if not succeeded(reload):
-        print(f"systemctl --user daemon-reload failed: {reload.stdout.strip() if reload else 'not found'}")
-        return 1
+    # One call for all units: each systemctl mask reloads systemd (~0.5 s),
+    # and that reload also picks up the unit installed above. Recorded first,
+    # so an interrupted prepare still gets them unmasked.
+    units = [PLASMASHELL_UNIT, *QUIET_MASKED_UNITS]
+    record_undo("masked", units)
+    if succeeded(systemctl("mask", "--runtime", *units)):
+        log(f"masked {', '.join(units)} for this session")
+    else:
+        for unit in units:
+            if not succeeded(systemctl("mask", "--runtime", unit)):
+                log(f"failed to mask {unit}")
+        reload = systemctl("daemon-reload")
+        if not succeeded(reload):
+            print(f"systemctl --user daemon-reload failed: {reload.stdout.strip() if reload else 'not found'}")
+            return 1
     log(f"prepared {pending.get('name')} ({pending.get('mode')})")
     return 0
 
