@@ -407,6 +407,14 @@ function Content() {
           />
         </PanelSectionRow>
         <PanelSectionRow>
+          <ToggleField
+            label="Reconnect dropped streams"
+            description="If a stream's connection drops, e.g. after sleep or while the host restarts its app, start it again instead of ending the session."
+            checked={settings.reconnect_streams}
+            onChange={(v) => update("reconnect_streams", v)}
+          />
+        </PanelSectionRow>
+        <PanelSectionRow>
           <DropdownItem
             label="Power profile"
             description={POWER_PROFILES.find((p) => p.data === settings.power_profile)?.description}

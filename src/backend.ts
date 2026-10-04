@@ -3,6 +3,7 @@ import { callable } from "@decky/api";
 export interface Settings {
   return_to_gaming: boolean;
   force_fullscreen: boolean;
+  reconnect_streams: boolean;
   power_profile: PowerProfile;
   wifi_powersave_off: boolean;
   wifi_lock_ap: boolean;

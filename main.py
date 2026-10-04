@@ -13,6 +13,9 @@ import decky
 SETTINGS_DEFAULTS = {
     "return_to_gaming": True,
     "force_fullscreen": True,
+    # Stream entries: when the connection drops (sleep, the host restarting
+    # its app), start the stream again instead of ending the session.
+    "reconnect_streams": True,
     # "performance": GPU clocks high, performance governor. "battery": GPU on
     # auto, powersave governor, CPU boost off (about 40% less APU power).
     # "auto": battery on battery, performance when plugged in.
@@ -520,6 +523,7 @@ class Plugin:
                 "gameid": gameid,
                 "return_to_gaming": s["return_to_gaming"],
                 "force_fullscreen": s["force_fullscreen"],
+                "reconnect_streams": s["reconnect_streams"],
                 "power_profile": s["power_profile"],
                 "wifi_powersave_off": s["wifi_powersave_off"],
                 "wifi_lock_ap": s["wifi_lock_ap"],

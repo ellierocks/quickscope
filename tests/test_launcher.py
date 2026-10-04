@@ -251,6 +251,55 @@ console.log(JSON.stringify({ whileHeld, after: workspace.activeWindow === app ? 
         self.assertEqual(out["whileHeld"], {"active": "loading", "closed": False, "fullScreen": True})
         self.assertEqual(out["after"], "app")
 
+    @unittest.skipUnless(shutil.which("node"), "node not installed")
+    def test_reconnected_stream_gets_the_same_treatment(self):
+        js = (
+            self.l.SESSION_JS.replace("%LOADING_TITLE%", self.l.LOADING_TITLE)
+            .replace("%OSD_TITLE%", self.l.OSD_TITLE)
+            .replace("%LOADING_PID%", "42")
+            .replace("%FORCE_FULLSCREEN%", "true")
+            .replace("%MINIMIZE_STEAM_WINDOWS%", "true")
+            .replace("%HOLD_LOADING%", "true")
+        )
+        harness = """
+function signal() {
+  const handlers = [];
+  return { connect: (f) => handlers.push(f), disconnect: (f) => handlers.splice(handlers.indexOf(f), 1),
+           emit: (...a) => [...handlers].forEach((f) => f(...a)) };
+}
+let open = [];
+const workspace = { windowAdded: signal(), windowRemoved: signal(), windowActivated: signal(),
+                    windowList: () => open, activeWindow: null };
+function win(cls, pid, caption) {
+  return { resourceClass: cls, caption: caption || cls, normalWindow: true, pid, closed: false, minimized: false,
+           fullScreen: false, minimizedChanged: signal(), closeWindow() { this.closed = true; } };
+}
+%SCRIPT%
+const first = win("com.moonlight_stream.Moonlight", 7);
+open = [first];
+workspace.windowAdded.emit(first);
+// The stream drops: a new loading screen (another process, same title) covers
+// Moonlight, which is closed, and a new Moonlight opens behind it.
+const loading = win("qml6", 50, "%LOADING_TITLE%");
+open = [first, loading];
+workspace.windowAdded.emit(loading);
+open = [loading];
+workspace.windowRemoved.emit(first);
+const second = win("com.moonlight_stream.Moonlight", 8);
+open = [loading, second];
+workspace.windowAdded.emit(second);
+const whileHeld = { active: workspace.activeWindow === loading ? "loading" : "other", closed: loading.closed,
+                    fullScreen: second.fullScreen };
+open = [second];
+workspace.windowRemoved.emit(loading);
+console.log(JSON.stringify({ whileHeld, after: workspace.activeWindow === second ? "second" : "other" }));
+""".replace("%SCRIPT%", js).replace("%LOADING_TITLE%", self.l.LOADING_TITLE)
+        result = subprocess.run(["node", "-e", harness], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = json.loads(result.stdout)
+        self.assertEqual(out["whileHeld"], {"active": "loading", "closed": False, "fullScreen": True})
+        self.assertEqual(out["after"], "second")
+
 
 class Brightness(LauncherTestCase):
     def setUp(self):
@@ -1006,6 +1055,107 @@ class StreamLaunch(LauncherTestCase):
     def test_watcher_hands_over_on_failure(self):
         _, closed = self.run_watcher(["00:00:01 - Qt Critical: Network unreachable (Error 99)\n"])
         self.assertEqual(closed, ["loading"])
+
+    def reconnect(self):
+        """A StreamReconnect with the loading screen and closing Moonlight faked."""
+        shown, closed_apps = [], []
+        self.l.show_loading_screen = lambda message, still=False: shown.append(message) or "reconnecting"
+        self.l.close_loading_screen = lambda proc: None
+        self.l.close_app = closed_apps.append
+        reconnect = self.l.StreamReconnect({"host": "star", "app": "Desktop"})
+        reconnect.proc = "moonlight"
+        return reconnect, shown, closed_apps
+
+    def test_reconnect_decisions(self):
+        reconnect, shown, closed_apps = self.reconnect()
+        self.assertFalse(reconnect.on_drop(0, True))  # the host ended the app on purpose
+        self.assertFalse(reconnect.on_drop(-104, True))  # encoder error: would just fail again
+        self.assertFalse(reconnect.on_drop(None, False))  # the very first connection failing
+        self.assertEqual((shown, reconnect.dropped), ([], False))
+        self.assertTrue(reconnect.on_drop(-1, True))  # connection lost mid-stream
+        time.sleep(0.05)
+        self.assertEqual((shown, closed_apps, reconnect.dropped), (["Reconnecting to star…"], ["moonlight"], True))
+        # Retries that fail to connect keep going until the window runs out.
+        self.assertTrue(reconnect.on_drop(None, False))
+        reconnect.deadline = time.monotonic() - 1
+        self.assertFalse(reconnect.on_drop(None, False))
+        # A good run in between starts a fresh window.
+        self.assertTrue(reconnect.on_drop(-1, True))
+
+    def test_watcher_keeps_the_loading_screen_through_a_drop(self):
+        reconnect, shown, _ = self.reconnect()
+        hold = self.l.LoadingHold("loading", ["stream"])
+        reconnect.hold = hold
+
+        class Proc:
+            stdout = iter(
+                [
+                    "00:00:01 - SDL Info (0): Starting RTSP handshake...\n",
+                    "00:00:02 - SDL Error (0): Connection terminated: -1\n",
+                    "00:00:02 - Qt Critical: Connection terminated\n",
+                ]
+            )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.l.watch_stream(Proc, hold, {"host": "star"}, time.monotonic(), reconnect.on_drop)
+        # Dropped before video: the same loading screen stays up for the retry.
+        self.assertEqual((shown, "stream" in hold.reasons, reconnect.dropped), ([], True, True))
+
+    def test_dropped_stream_starts_again(self):
+        procs = []
+
+        class Proc:
+            def __init__(self, lines, rc):
+                self.pid, self.rc, self.stdout = 100 + len(procs), rc, iter(lines)
+
+            def poll(self):
+                return self.rc
+
+            def wait(self, timeout=None):
+                return self.rc
+
+        runs = [
+            ["00:00:02 - SDL Info (0): Video stream is 1920x1200x60\n", "SDL Error (0): Connection terminated: -1\n"],
+            ["00:00:02 - SDL Info (0): Video stream is 1920x1200x60\n", "SDL Error (0): Connection terminated: 0\n"],
+        ]
+
+        def popen(*args, **kwargs):
+            procs.append(Proc(runs[len(procs)], None if not procs else 0))
+            return procs[-1]
+
+        real_popen = subprocess.Popen
+        self.addCleanup(setattr, subprocess, "Popen", real_popen)
+        subprocess.Popen = popen
+        self.l.show_loading_screen = lambda message, still=False: "reconnecting"
+        self.l.close_loading_screen = lambda proc: None
+        self.l.close_app = lambda p: setattr(p, "rc", -15)
+        self.l.network_connected = lambda: True
+        self.l.RECONNECT_DELAY = 0
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.l.run_direct({"command": "moonlight", "stream": {"host": "star", "app": "Desktop"}})
+        # Dropped (-1) and started again; the host ending it (0) ends the session.
+        self.assertEqual([p.rc for p in procs], [-15, 0])
+
+    def test_reconnecting_can_be_turned_off(self):
+        procs = []
+
+        class Proc:
+            pid, rc = 1, None
+            stdout = iter(["SDL Info (0): Video stream is 1920x1200\n", "SDL Error (0): Connection terminated: -1\n"])
+
+            def poll(self):
+                return 1  # Moonlight exits once its error is dismissed
+
+            def wait(self, timeout=None):
+                return 1
+
+        real_popen = subprocess.Popen
+        self.addCleanup(setattr, subprocess, "Popen", real_popen)
+        subprocess.Popen = lambda *args, **kwargs: procs.append(Proc()) or procs[-1]
+        stream = {"host": "star", "app": "Desktop"}
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.l.run_direct({"command": "moonlight", "stream": stream, "reconnect_streams": False})
+        self.assertEqual(len(procs), 1)
 
 
 class Recovery(LauncherTestCase):

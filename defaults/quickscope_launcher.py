@@ -276,8 +276,21 @@ windowAdded.connect(function (w) {
         focusApp();
     }
 });
+// A reconnecting stream shows a new loading screen, held like the first.
+var holdLoadingScreens = holdLoading;
+windowAdded.connect(function (w) {
+    if (w && holdLoadingScreens && isLoadingScreen(w)) {
+        holdLoading = true;
+        activate(w);
+    }
+});
 windowRemoved.connect(function (w) {
-    if (w === appWindow) appWindow = null;
+    // Gone, e.g. a stream that dropped: the next app window (Moonlight
+    // reconnecting) gets the same treatment as the first.
+    if (w === appWindow) {
+        appWindow = null;
+        windowAdded.connect(onWindowAdded);
+    }
     if (holdLoading && isLoadingScreen(w)) {
         holdLoading = false;
         focusApp();
@@ -1710,8 +1723,17 @@ def unquote_ini(value):
 STREAM_CONNECTING = "Starting RTSP handshake"
 STREAM_STARTED = re.compile(r"Video stream is \d+x\d+")
 STREAM_FAILED = re.compile(r"Qt Critical:")
+STREAM_TERMINATED = re.compile(r"Connection terminated: (-?\d+)")
 # Longest the loading screen waits for video before showing Moonlight anyway.
 STREAM_WAIT = 45
+# Moonlight's termination codes that a reconnect wouldn't help: 0 is the host
+# ending the stream on purpose (e.g. the app quit), -103 protected content,
+# -104 a fatal encoder error. Anything else, like -1 (connection lost), is a
+# drop worth reconnecting.
+STREAM_NO_RECONNECT = {0, -103, -104}
+# How long to keep trying to reconnect a dropped stream, and the pause first.
+RECONNECT_WINDOW = 180
+RECONNECT_DELAY = 2
 
 
 class LoadingHold:
@@ -2184,28 +2206,92 @@ def steam_game_running(appid):
     return False
 
 
-def watch_stream(proc, hold, stream, started):
+def watch_stream(proc, hold, stream, started, on_drop=None):
     """Follow Moonlight's output during a `stream` launch: pass it through to
-    the journal, and keep the loading screen up until video starts."""
+    the journal, and keep the loading screen up until video starts.
+
+    `on_drop(code, video)` hears about a connection that ended with Moonlight's
+    termination code (None: a reconnect attempt that failed to connect) and
+    whether video had started; it returns True if it reconnects, and the
+    loading screen then stays for the next attempt."""
     host, app = stream.get("host", "the host"), stream.get("app", "").strip() or "the stream"
     hold.status("stream", f"Connecting to {host}…")
     timer = threading.Timer(STREAM_WAIT, hold.release, ["stream"])
     timer.daemon = True
     timer.start()
+    video = dropping = False
     for line in proc.stdout:
         sys.stdout.write(line)
         sys.stdout.flush()
         if STREAM_CONNECTING in line:
             hold.status("stream", f"Starting {app}…")
         elif STREAM_STARTED.search(line):
+            video = True
             log(f"stream started {time.monotonic() - started:.1f}s after launch")
             hold.release("stream")
+        elif terminated := STREAM_TERMINATED.search(line):
+            dropping = dropping or bool(on_drop and on_drop(int(terminated.group(1)), video))
         elif STREAM_FAILED.search(line):
+            if dropping or (on_drop and not video and on_drop(None, video)):
+                dropping = True
+                continue
             # Moonlight shows its own error; let it be seen.
             log(f"stream failed: {line.strip()}")
             hold.release("stream")
     timer.cancel()
-    hold.release("stream")
+    if not dropping:
+        hold.release("stream")
+
+
+class StreamReconnect:
+    """Starts a dropped stream again instead of ending the session: after the
+    Deck wakes from sleep, or when the host restarts its app. Moonlight would
+    show "Connection terminated" and exit once that's dismissed; instead a
+    loading screen covers it, Moonlight is closed, and the stream is started
+    again once the network is back. Retries for RECONNECT_WINDOW, then
+    Moonlight's own error is left on screen."""
+
+    def __init__(self, stream):
+        self.host = stream.get("host") or "the host"
+        self.proc = None
+        self.hold = None
+        self.deadline = None  # while reconnecting: when to give up
+        self.dropped = False
+
+    def on_drop(self, code, video):
+        if code in STREAM_NO_RECONNECT or EXIT_REQUESTED.is_set():
+            return False
+        if code is None and self.deadline is None:
+            return False  # the first connection failing: Moonlight's error stands
+        now = time.monotonic()
+        if video:
+            self.deadline = None  # a drop after a good run gets a fresh window
+        if self.deadline is not None and now >= self.deadline:
+            log("still can't reconnect, leaving Moonlight's error up")
+            return False
+        self.deadline = self.deadline or now + RECONNECT_WINDOW
+        self.dropped = True
+        log(f"stream dropped (code {code}), reconnecting" if code is not None else "reconnect failed, trying again")
+        # Cover Moonlight's error before closing it (a drop before video still
+        # has its loading screen up).
+        if self.hold is None or "stream" not in self.hold.reasons:
+            self.hold = LoadingHold(show_loading_screen(f"Reconnecting to {self.host}…"), ["stream"])
+        threading.Thread(target=close_app, args=(self.proc,), daemon=True).start()
+        return True
+
+    def wait(self):
+        """Until the network is back, after a short pause. False to give up."""
+        if not network_connected():
+            self.hold.status("stream", "Waiting for the network…")
+        if EXIT_REQUESTED.wait(RECONNECT_DELAY):
+            return False
+        while not network_connected():
+            if EXIT_REQUESTED.wait(1):
+                return False
+            if time.monotonic() >= self.deadline:
+                log("network didn't come back, giving up on the stream")
+                return False
+        return True
 
 
 # Moonlight raises these threads with SDL_SetThreadPriority, which inside
@@ -2307,33 +2393,58 @@ def run_direct(pending, background_steam=False, hold=None):
     if cwd and not os.path.isdir(cwd):
         log(f"start dir {cwd!r} missing, using home")
         cwd = None
-    log(f"exec: {pending['command']}")
-    started = time.monotonic()
-    watch = hold is not None and pending.get("stream")
-    output = (
-        {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT, "text": True, "errors": "replace"} if watch else {}
-    )
-    # Its own process group, so a "…" hold can close the app and everything
-    # it started (Flatpak's wrappers included).
-    proc = subprocess.Popen(["bash", "-c", pending["command"]], cwd=cwd or HOME, start_new_session=True, **output)
-    if watch:
-        threading.Thread(target=watch_stream, args=(proc, hold, pending["stream"], started), daemon=True).start()
-    priority = None
-    if is_moonlight(pending) and shutil.which("dbus-send"):
-        priority = MoonlightPriority(proc.pid)
-        priority.start()
-    if background_steam:
-        # Give the app a head start on CPU and disk before Steam's heavy startup.
-        time.sleep(HYBRID_STEAM_DELAY)
-        start_background_steam()
-    while proc.poll() is None:
-        if EXIT_REQUESTED.wait(0.5):
-            close_app(proc)
+    stream = pending.get("stream")
+    if stream and hold is None:
+        hold = LoadingHold(None, ["stream"])  # still follow the stream, just without a loading screen
+    reconnect = StreamReconnect(stream) if stream and pending.get("reconnect_streams", True) else None
+    first = True
+    while True:
+        log(f"exec: {pending['command']}")
+        started = time.monotonic()
+        output = (
+            {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT, "text": True, "errors": "replace"}
+            if stream
+            else {}
+        )
+        # Its own process group, so a "…" hold can close the app and everything
+        # it started (Flatpak's wrappers included).
+        proc = subprocess.Popen(["bash", "-c", pending["command"]], cwd=cwd or HOME, start_new_session=True, **output)
+        watcher = None
+        if stream:
+            if reconnect:
+                reconnect.proc, reconnect.hold, reconnect.dropped = proc, hold, False
+            watcher = threading.Thread(
+                target=watch_stream,
+                args=(proc, hold, stream, started, reconnect.on_drop if reconnect else None),
+                daemon=True,
+            )
+            watcher.start()
+        priority = None
+        if is_moonlight(pending) and shutil.which("dbus-send"):
+            priority = MoonlightPriority(proc.pid)
+            priority.start()
+        if background_steam and first:
+            # Give the app a head start on CPU and disk before Steam's heavy startup.
+            time.sleep(HYBRID_STEAM_DELAY)
+            start_background_steam()
+        first = False
+        while proc.poll() is None:
+            if EXIT_REQUESTED.wait(0.5):
+                close_app(proc)
+                break
+        code = proc.wait()
+        if priority:
+            priority.stop()
+        if watcher:
+            watcher.join(timeout=5)  # its last lines decide whether to reconnect
+        log(f"exited with {code} after {int(time.monotonic() - started)}s")
+        if not (reconnect and reconnect.dropped) or EXIT_REQUESTED.is_set():
             break
-    code = proc.wait()
-    if priority:
-        priority.stop()
-    log(f"exited with {code} after {int(time.monotonic() - started)}s")
+        hold = reconnect.hold
+        if not reconnect.wait():
+            break
+    if reconnect and reconnect.dropped:
+        reconnect.hold.release("stream")  # a reconnect given up on
 
 
 def close_app(proc):
