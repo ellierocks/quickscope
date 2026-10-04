@@ -1,6 +1,18 @@
 # Changelog
 
-All releases so far are pre-releases, tested on a Steam Deck LCD.
+Releases before 1.0.0 were pre-releases, tested on a Steam Deck LCD.
+
+## 1.0.0
+
+- First stable release.
+- **Moonlight gets the thread priority it asks for:** its frame pacing and audio threads run at raised priority, as Moonlight intends. Inside Flatpak its own request fails on SteamOS (the desktop portal can't map the sandbox's thread IDs), in Gaming Mode too, so Quickscope asks the system's RealtimeKit for it.
+- **Moonlight settings override:** automatic bitrate (Moonlight's own default for the resolution, frame rate and YUV 4:4:4, or Nonary's fork's for PyroWave, including HDR), plus YUV 4:4:4, the performance stats overlay and Keep the screen awake. The bitrate slider goes up to 3 Gbps for PyroWave.
+- **Reconnect dropped streams** (on by default): when a stream entry's connection drops, after the Deck sleeps or while the host restarts its app, Quickscope covers Moonlight's error with a loading screen and starts the stream again once the network is back, for up to 3 minutes. A host ending the stream on purpose still ends the session.
+- **Idle settings:** how long before the Deck sleeps and the screen turns off without input, for the session only. They default to SteamOS's own (on battery: 5 minutes and 1 minute).
+- **Battery at a tap of …:** the level and the time left, or the time to full while charging, from the average current over the last 5 minutes.
+- **Low-battery warnings** at 20% and 10%, and a critical warning at 2%. Nothing warned in the session before: KDE's warning is a notification, and there's no Plasma shell to show it.
+- Lighter sessions: the volume and brightness indicator no longer wakes up 10 times a second while hidden, and Wi-Fi power saving is re-checked after a reconnect instead of every 2 seconds.
+- **Install from URL:** Decky's **Install Plugin from URL** with `https://github.com/ellierocks/quickscope/releases/latest/download/Quickscope.zip` installs the newest release, and the same steps update it.
 
 ## 0.9.0
 
