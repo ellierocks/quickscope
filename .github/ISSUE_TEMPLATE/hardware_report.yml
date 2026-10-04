@@ -1,0 +1,54 @@
+name: Hardware report
+description: Tried Quickscope on hardware we haven't tested? Tell us how it went, good or bad.
+labels: [hardware-report]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Quickscope has only been tested on a Steam Deck LCD, handheld and docked to one TV. Reports from other hardware are what gets it to 1.0.
+  - type: dropdown
+    id: device
+    attributes:
+      label: Device
+      options:
+        - Steam Deck OLED
+        - Steam Deck LCD
+        - Steam Machine
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: moonlight
+    attributes:
+      label: Moonlight
+      options:
+        - Upstream Moonlight (Flathub)
+        - Nonary's VRR fork
+        - Other / not using Moonlight
+    validations:
+      required: true
+  - type: checkboxes
+    id: works
+    attributes:
+      label: What worked
+      description: Tick what you tried and found working; describe anything else below.
+      options:
+        - label: Launching a stream entry, and the return to Gaming Mode
+        - label: Controller (Hybrid mode, Steam's desktop layout)
+        - label: Brightness shortcut (hold … and push the left stick)
+        - label: Volume buttons and the volume indicator
+        - label: Hold … for 3 seconds to quit
+        - label: Docked, with Match Gaming Mode display settings
+        - label: HDR (built-in screen on OLED, or an HDR TV)
+        - label: VRR (with Nonary's fork, on a VRR display)
+        - label: Per-display Moonlight settings override
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything off?
+      description: Wrong brightness levels, a display mode that didn't apply, flicker, odd colours, slow launches…
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: In Quickscope's panel, **Help → Save diagnostics**, then attach `~/Downloads/quickscope-diagnostics.txt`. Network names and addresses are masked.

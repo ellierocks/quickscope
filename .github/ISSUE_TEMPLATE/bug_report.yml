@@ -1,0 +1,47 @@
+name: Bug report
+description: Something didn't work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! The diagnostics file answers most first questions, so please attach it.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: launch
+    attributes:
+      label: What were you launching?
+      options:
+        - A stream entry (Stream from …)
+        - The Moonlight shortcut
+        - Another non-Steam app
+        - A Steam game
+        - Nothing, it's about the panel or settings
+    validations:
+      required: true
+  - type: dropdown
+    id: setup
+    attributes:
+      label: Setup
+      options:
+        - Handheld
+        - Docked / external display
+        - Steam Machine
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: |
+        In Quickscope's panel, press **Help → Save diagnostics** right after the problem, then attach `~/Downloads/quickscope-diagnostics.txt` here (drag it in, or paste its contents).
+        Network names and addresses are masked in it.
+      placeholder: Drop the file here, or paste its contents.
+    validations:
+      required: true

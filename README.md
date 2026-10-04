@@ -10,7 +10,7 @@ A [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin for t
 
 </div>
 
-Quickscope hands the screen to a single app in a stripped-down Plasma Wayland session (KWin, no panel, nothing in the background) and returns you to Gaming Mode when the app exits. From pressing **A** to Moonlight on screen takes about **6 seconds**.
+Quickscope hands the screen to a single app in a stripped-down Plasma Wayland session (KWin, no panel, nothing in the background) and returns you to Gaming Mode when the app exits. Pick a game from your streaming host's app list and you're streaming it about **8 seconds** later, Moonlight's own connection included.
 
 ## Why
 
@@ -25,12 +25,13 @@ Moonlight's own statistics, streaming *Batman: Arkham Knight* from [Vibeshine](h
 
 ## Features
 
-- **One button press** from the Quick Access menu (pinned and recent apps, search) or from a game's library page
-- **Fast startup:** the app launches the moment the compositor is up, with a loading screen instead of a black screen
+- **Straight into a stream:** your Moonlight host's apps are listed in the panel. One press and the loading screen stays up until the stream is actually playing, with no Moonlight menus in between
+- **Fast startup:** the app launches the moment the compositor is up, behind a loading screen instead of a black screen
 - **Your controller layout** keeps working through Steam's desktop layout
-- **A quiet session:** no Plasma panel, splash screen or KDE background helpers, with a high performance or battery saver profile
-- **Brightness and volume controls** in place of the Quick Access menu
-- **Leaves no trace:** every change is session-only and undone on exit. Your own apps, services and app settings are never touched.
+- **A quiet session:** no Plasma panel, splash screen or KDE background helpers; Automatic, High performance or Battery saver power profiles; Wi-Fi power saving off
+- **Per-display Moonlight settings** (optional), and the display's own resolution, refresh rate and HDR when docked
+- **Brightness, volume and a way out** in place of the Quick Access menu
+- **Leaves no trace:** every change is session-only and undone on exit, even if something crashes. Your own apps, services and app settings are never touched.
 
 ## Install
 
@@ -42,12 +43,19 @@ Moonlight's own statistics, streaming *Batman: Arkham Knight* from [Vibeshine](h
 
 ## Usage
 
-Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quickscope** button on a game's library page (bottom-right of the header art, above the Play row). Play itself still launches in Gaming Mode as usual.
+Open **Quickscope** from the Quick Access menu (**⋯**). The panel lists, in order:
+
+1. **Pinned** streams and apps
+2. **Stream from *host***: the apps of each host Moonlight has paired with, to stream straight into
+3. **Moonlight** itself, for its menus (pairing, settings)
+4. **Other apps:** search any non-Steam game or installed Steam game
+
+Steam games also get a **Quickscope** button on their library page (bottom-right of the header art, above the Play row). Play itself still launches in Gaming Mode as usual.
 
 | Button | |
 |:---:|---|
 | **A** | Launch outside Gamescope |
-| **X** | Pin / unpin |
+| **X** | Pin / unpin (apps and stream entries) |
 | **Y** | Switch launch method (non-Steam apps) |
 
 | Launch method | What happens | Controller |
@@ -64,8 +72,8 @@ Open **Quickscope** from the Quick Access menu (**⋯**), or press the **Quicksc
 
 ### Moonlight
 
-- Add Moonlight (Flatpak) as a non-Steam shortcut and leave it on **Hybrid**. Your Moonlight settings are used as-is unless you turn on the override below.
-- To jump straight into a stream, use the launch options `run com.moonlight_stream.Moonlight stream <host> "<app>"`. Moonlight then closes when the stream ends, which returns you to Gaming Mode.
+- Install Moonlight (Flatpak, from Discover) and pair it with your PC once. Its hosts' apps then appear under **Stream from *host***. A stream entry runs Moonlight's `stream` command in Hybrid mode, and ends back in Gaming Mode when the stream does. Hosts and apps are read from Moonlight's own saved list; open Moonlight to refresh it.
+- To open Moonlight itself from the panel, add it as a non-Steam shortcut and leave it on **Hybrid**. Your Moonlight settings are used as-is unless you turn on the override below.
 - Quit a stream with **L1 + R1 + Start + Select**.
 
 **Per-display Moonlight settings (optional).** *Settings → Moonlight settings* opens a page with an **Override Moonlight settings** toggle, off by default. Turned on, each display gets its own resolution (including above the screen's, for supersampling), frame rate, codec, bitrate, V-Sync, frame pacing and HDR, picked automatically by the display Moonlight runs on: one set for the Deck's screen, another for your TV. With [Nonary's VRR fork](https://github.com/Nonary/moonlight-qt) it also offers PyroWave and, on VRR displays, VRR with the fork's VRR frame rates; neither appears with upstream Moonlight. While the override is on, Moonlight follows these settings: Quickscope swaps them into Moonlight's settings for the session and puts your own values back afterwards, so change them on this page rather than in Moonlight. Moonlight settings the page doesn't cover are never touched.
@@ -92,7 +100,8 @@ There's no Quick Access menu outside Gaming Mode, so Quickscope adds its own con
 
 ## Troubleshooting
 
-- **Stuck on the desktop?** Use *Return to Gaming Mode*, or run `steamos-session-select gamescope`.
+- **App hung, or stuck on the desktop?** Hold **…** for 3 seconds: the app closes and the Deck returns to Gaming Mode. If Quickscope's launcher itself crashes, a recovery job undoes the session and returns on its own. From a terminal: `steamos-session-select gamescope`.
+- **Black screen for a few seconds on the way back?** Normal: KWin clears the display when it exits, and Gaming Mode draws again once Steam's UI is up. Sometimes the returning screen stays frozen until then instead.
 - **Wi-Fi drops for a moment when the desktop starts?** That's SteamOS: with *Force WPA Supplicant Wi-Fi backend* on (Developer settings), Steam restarts NetworkManager whenever it starts, in normal Desktop Mode too. Quickscope holds its loading screen until the network is back. Turning that setting off avoids the drop entirely.
 - **No loading screen when docked?** Expected: a TV takes a few seconds to re-sync after the session switch, and the app is usually open before the picture comes back.
 - **Decky disappeared after several very short sessions in a row?** Decky's crash protection disables it when Steam's UI goes away three times within about a minute, and each Quickscope round trip closes Steam's UI twice. Restart the Deck (or `sudo systemctl start plugin_loader`) to bring it back. Normal sessions longer than a minute don't trigger it.
@@ -102,9 +111,9 @@ There's no Quick Access menu outside Gaming Mode, so Quickscope adds its own con
 <details>
 <summary><b>How it works</b></summary>
 
-1. The plugin stages the launch, applies the session tweaks below, and switches to Plasma on Wayland (`steamosctl switch-to-desktop-mode plasma.desktop`). Wayland is always used: on X11, apps could leave fullscreen and startup was slower. If Gamescope hangs while shutting down, Quickscope ends it after 3 s instead of waiting out systemd's 10 s timeout.
-2. A systemd user unit, `quickscope-launch.service`, starts the launcher as soon as KWin is up, before Plasma's panel or autostart apps.
-3. The launcher shows the loading screen, loads a temporary KWin script (fullscreen and focus the app's first window, then close the loading screen) and starts the app.
+1. The plugin stages the launch, applies the session tweaks below, and switches to Plasma on Wayland (`steamosctl switch-to-desktop-mode plasma.desktop`). Wayland is always used: on X11, apps could leave fullscreen and startup was slower. Gamescope's own process is killed 0.3 s into its shutdown: left alone it often aborts (and has a crash dump written) or hangs. Steam and the rest still get their normal SIGTERM.
+2. A systemd user unit, `quickscope-launch.service`, starts the launcher as soon as KWin is up, before Plasma's panel or autostart apps. If the launcher dies, its `OnFailure=` runs `quickscope-recover.service`, which undoes the session and returns to Gaming Mode.
+3. The launcher shows the loading screen, loads a temporary KWin script (fullscreen and focus the app's window, keep desktop Steam's window minimized) and starts the app. The loading screen closes when the app's window is up or, for a stream entry, when Moonlight reports the video has started (and, with the WPA Supplicant backend, once the network has settled).
 4. When the app exits, every tweak is undone and the Deck returns to Gaming Mode.
 
 **Session tweaks.** Each one is recorded in `~/.local/state/quickscope/undo.json` and undone on exit. If that's interrupted, they're undone when the plugin next loads, or from **Cancel pending launch**.
@@ -118,13 +127,14 @@ There's no Quick Access menu outside Gaming Mode, so Quickscope adds its own con
 | Brightness | Writes the backlight (`/sys/class/backlight/*/brightness`) and re-applies it if KDE changes it (for the whole session with the lock, otherwise while the desktop starts); the original level is restored afterwards |
 | Display | Gaming Mode's mode is read with `modetest` before switching, then set with `kscreen-doctor` (external displays: the Deck's screen off, as in Gaming Mode). Only what differs is changed, since every change makes a TV re-sync. KDE's new-display dialog (`plasma-kscreen-osd.service`) is masked for the session, and `~/.config/kwinoutputconfig.json` is restored afterwards |
 | Brightness shortcut | Reads the built-in controller's hidraw reports without grabbing them, so Steam and the app still get every input |
+| Wi-Fi *(settings)* | Power saving off with `steamosctl set-wifi-power-management-state`. With the WPA Supplicant backend, the connection is locked to its current access point (`nmcli connection modify … 802-11-wireless.bssid`), which also stops background scans. Both restored afterwards |
 | Power profile *(setting)* | High performance: GPU level `high`, `performance` governor. Battery saver: GPU `auto`, `powersave` governor, CPU boost off. Both use the kernel's own CPU scheduler instead of `scx_lavd` (same latency, about 1 W less while streaming). Automatic picks one from `/sys/class/power_supply` and switches if you plug in or unplug. Set with `steamosctl`, re-applied while running, restored afterwards |
 
 Everything lives in `~/.config` or `/run`, never in files a SteamOS update replaces. If Quickscope had to create `ksplashrc`, it deletes it again afterwards.
 
 Steam is started as `/usr/lib/steam/steam -steamdeck -silent -noverifyfiles -skipinitialbootstrap -norepairfiles`. It bypasses the `/usr/bin/steam` wrapper, whose `-pipewire` flag triggers a screen-capture permission prompt every session on Wayland. The flags also skip the file check Steam runs after Gaming Mode's Steam is shut down abruptly.
 
-`quickscope-launch.service` stays installed but does nothing unless a launch is staged. A staged launch older than 5 minutes is ignored. Uninstalling the plugin removes the unit and `~/.local/state/quickscope`.
+`quickscope-launch.service` stays installed but does nothing unless a launch is staged. A staged launch older than 5 minutes is ignored. Uninstalling the plugin removes the units and everything in `~/.local/state/quickscope` except `launcher.log` (Decky runs the same step when updating a plugin, and the log should survive that).
 
 </details>
 
