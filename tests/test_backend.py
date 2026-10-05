@@ -60,6 +60,14 @@ class BuildDirectCommand(unittest.TestCase):
 class PrepareLaunch(unittest.TestCase):
     def setUp(self):
         main._run_launcher = _no_launcher
+        self.started = []
+
+        async def fake_start(*args):
+            self.started.append(args)
+
+        real_start = main._start_launcher
+        main._start_launcher = fake_start
+        self.addCleanup(setattr, main, "_start_launcher", real_start)
         os.makedirs(decky.DECKY_PLUGIN_SETTINGS_DIR, exist_ok=True)
         path = os.path.join(decky.DECKY_PLUGIN_SETTINGS_DIR, "settings.json")
         if os.path.exists(path):
@@ -103,6 +111,14 @@ class PrepareLaunch(unittest.TestCase):
         self.assertEqual(mode, "hybrid")
         self.assertEqual(pending["command"], "flatpak run com.moonlight_stream.Moonlight stream star '  Resume'")
         self.assertEqual(pending["stream"], {"host": "star", "app": "  Resume"})
+        # The host starts the app while the session switches.
+        self.assertEqual(self.started, [("--start-host-app",)])
+        asyncio.run(self.plugin.cancel_pending())
+        self.assertEqual(self.started[-1], ("--quit-host-app",))
+
+    def test_only_streams_start_a_host_app(self):
+        self.stage(SHORTCUT)
+        self.assertEqual(self.started, [])
 
     def test_stream_launch_runs_the_shortcuts_appimage(self):
         # Even with the Flatpak installed: the shortcut is the Moonlight in use.

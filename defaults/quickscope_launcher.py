@@ -17,6 +17,10 @@ returns to Gaming Mode when the app exits.
                print a shareable report (personal details masked)
   --moonlight-hosts
                print Moonlight's saved hosts and their apps, as JSON
+  --start-host-app
+               ask the host to start the staged stream's app (after --prepare)
+  --quit-host-app
+               quit it again when the staged launch is cancelled
   --uninstall  undo tweaks and remove the systemd unit
 
 Every tweak lives in ~/.config or /run and is recorded in undo.json, so
@@ -452,6 +456,74 @@ LOADING_OVERLAY = """\
     LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
     LayerShell.Window.exclusionZone: -1
     LayerShell.Window.scope: "quickscope-loading\""""
+RETURNING_TITLE = "Quickscope Returning"
+# The returning screen, started hidden during the session: a new QML process
+# takes longer to draw its first frame than Moonlight takes to close its
+# windows after a quit (about 0.2 s). Like the OSD, it waits on a long poll
+# rather than polling, and the answer shows it at once. It looks like the
+# loading screen's still version.
+RETURNING_QML = """\
+import QtQuick
+import QtQuick.Window
+import org.kde.layershell 1.0 as LayerShell
+
+Window {
+    id: screen
+    title: %(title)s
+    visible: false
+    color: "black"
+    LayerShell.Window.layer: LayerShell.Window.LayerOverlay
+    LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom
+                               | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
+    LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
+    LayerShell.Window.exclusionZone: -1
+    LayerShell.Window.scope: "quickscope-returning"
+
+    MouseArea {
+        anchors.fill: parent
+        acceptedButtons: Qt.NoButton
+        hoverEnabled: true
+        cursorShape: Qt.BlankCursor
+    }
+
+    Column {
+        anchors.centerIn: parent
+        spacing: 24
+        Text {
+            text: %(message)s
+            color: "#d0d0d0"
+            font.pixelSize: 26
+            anchors.horizontalCenter: parent.horizontalCenter
+        }
+        Rectangle {
+            width: 64
+            height: 4
+            radius: 2
+            color: "#1a9fff"
+            anchors.horizontalCenter: parent.horizontalCenter
+        }
+    }
+
+    Timer { id: retry; interval: 1000; onTriggered: screen.poll() }
+
+    function poll() {
+        var xhr = new XMLHttpRequest();
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState !== XMLHttpRequest.DONE) return;
+            if (xhr.responseText === "show") screen.visible = true;
+            else if (xhr.status === 200) screen.poll();
+            else retry.start();
+        };
+        xhr.open("GET", %(url)s);
+        xhr.send();
+    }
+
+    Component.onCompleted: poll()
+}
+"""
+# Seconds into the session before the hidden returning screen starts, clear
+# of the app's own start.
+RETURNING_PREPARE_DELAY = 5
 OSD_TITLE = "Quickscope OSD"
 # On-screen indicator for volume and brightness. Drawn as a layer-shell overlay
 # (QT_WAYLAND_SHELL_INTEGRATION=layer-shell) so it shows above fullscreen apps
@@ -1825,13 +1897,317 @@ def unquote_ini(value):
     return value
 
 
+INI_ESCAPES = {"n": "\n", "r": "\r", "t": "\t", "0": "\0", "\\": "\\", '"': '"'}
+
+
+def ini_bytes(value):
+    """A QSettings @ByteArray(...) value (quoted or not) as text, e.g. a PEM."""
+    if len(value) >= 2 and value[0] == value[-1] == '"':
+        value = value[1:-1]
+    m = re.fullmatch(r"@ByteArray\((.*)\)", value, re.S)
+    if not m:
+        return None
+    return re.sub(
+        r"\\(x[0-9a-fA-F]{1,2}|.)",
+        lambda e: chr(int(e.group(1)[1:], 16)) if e.group(1)[0] == "x" else INI_ESCAPES.get(e.group(1), e.group(1)),
+        m.group(1),
+    )
+
+
+def moonlight_host_entry(path, name):
+    """One saved host's raw keys from Moonlight's [hosts] section, or None."""
+    hosts = {}
+    try:
+        with open(path) as f:
+            section = None
+            for line in f:
+                line = line.rstrip("\n")
+                if line.startswith("["):
+                    section = line
+                elif section == "[hosts]" and (m := re.match(r"(\d+)\\([^\\=]+)=(.*)", line)):
+                    hosts.setdefault(m.group(1), {})[m.group(2)] = m.group(3)
+    except OSError:
+        return None
+    return next((h for h in hosts.values() if h.get("hostname") == name), None)
+
+
+# --- Starting the host's app early ---------------------------------------------
+#
+# Starting a stream is two steps: the host starts the app (GameStream's
+# /launch, which can take seconds, e.g. while Apollo sets up a virtual display),
+# then the client connects to it. Moonlight resumes an app the host is already
+# running, so the backend starts it as the A press switches sessions, and the
+# session waits for that before running Moonlight. The request is Moonlight's
+# own: its pairing certificate (read, never copied to disk) and its settings.
+
+HOST_APP = os.path.join(STATE, "host_app.json")
+# The session waits at most this long for the host to finish starting the app.
+HOST_APP_WAIT = 20
+HOST_HTTP_TIMEOUT = 3
+# Apps can take a while to start; the host answers once it has.
+HOST_LAUNCH_TIMEOUT = 30
+# Moonlight's audiocfg -> GameStream's surroundAudioInfo, (channel mask << 16)
+# | channel count: stereo, 5.1, 7.1.
+SURROUND_AUDIO_INFO = {"0": (0x3 << 16) | 2, "1": (0x3F << 16) | 6, "2": (0x63F << 16) | 8}
+
+
+class HostRequestError(Exception):
+    pass
+
+
+class MoonlightClient:
+    """GameStream requests to one host, as Moonlight makes them."""
+
+    def __init__(self, conf, name):
+        general = read_ini_section(conf) or {}
+        host = moonlight_host_entry(conf, name)
+        if host is None:
+            raise HostRequestError(f"{name} isn't one of Moonlight's hosts")
+        self.cert = ini_bytes(general.get("certificate", ""))
+        self.key = ini_bytes(general.get("key", ""))
+        self.server_cert = ini_bytes(host.get("srvcert", ""))
+        if not (self.cert and self.key and self.server_cert):
+            raise HostRequestError(f"Moonlight isn't paired with {name}")
+        self.unique_id = general.get("uniqueid") or "0123456789ABCDEF"
+        self.settings = general
+        # Moonlight's order: the LAN address first.
+        self.addresses = []
+        for kind in ("local", "manual", "remote", "ipv6"):
+            address = host.get(f"{kind}address", "").strip("[]")
+            port = host.get(f"{kind}port", "")
+            if address:
+                self.addresses.append((address, int(port) if port.isdigit() and int(port) else 47989))
+        self.address = self.https_port = None
+
+    def query(self, params=None):
+        return "&".join(
+            f"{k}={v}" for k, v in {"uniqueid": self.unique_id, "uuid": uuid_hex(), **(params or {})}.items()
+        )
+
+    def find(self):
+        """The first address that answers, and its HTTPS port."""
+        import http.client
+
+        for address, port in self.addresses:
+            conn = http.client.HTTPConnection(address, port, timeout=HOST_HTTP_TIMEOUT)
+            try:
+                conn.request("GET", f"/serverinfo?{self.query()}")
+                info = parse_host_xml(conn.getresponse().read())
+            except (OSError, HostRequestError, http.client.HTTPException):
+                continue
+            finally:
+                conn.close()
+            https_port = info.findtext("HttpsPort") or ""
+            self.address = address
+            self.https_port = int(https_port) if https_port.isdigit() else port - 5
+            return True
+        return False
+
+    def request(self, path, params=None, timeout=HOST_HTTP_TIMEOUT):
+        """An HTTPS request with Moonlight's certificate, to the host whose
+        certificate Moonlight pinned when pairing. The parsed XML."""
+        import http.client
+        import ssl
+
+        if self.address is None and not self.find():
+            raise HostRequestError("host not reachable")
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        # The host's certificate is self-signed; it's checked against the
+        # pinned one below instead.
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        # In memory only: an anonymous file, gone when closed.
+        fd = os.memfd_create("quickscope-client", os.MFD_CLOEXEC)
+        try:
+            os.write(fd, (self.cert + "\n" + self.key).encode())
+            context.load_cert_chain(f"/proc/self/fd/{fd}")
+        finally:
+            os.close(fd)
+        conn = http.client.HTTPSConnection(self.address, self.https_port, timeout=timeout, context=context)
+        try:
+            conn.connect()
+            if conn.sock.getpeercert(binary_form=True) != ssl.PEM_cert_to_DER_cert(self.server_cert):
+                raise HostRequestError("the host's certificate isn't the one Moonlight paired with")
+            conn.request("GET", f"/{path}?{self.query(params)}")
+            return parse_host_xml(conn.getresponse().read())
+        except (OSError, http.client.HTTPException) as e:
+            raise HostRequestError(f"{path}: {e}") from e
+        finally:
+            conn.close()
+
+    def launch_params(self, appid):
+        """/launch's parameters as Moonlight sends them for its current settings."""
+        s = self.settings
+        params = {
+            "appid": appid,
+            "mode": f"{int(s['width'])}x{int(s['height'])}x{int(s['fps'])}",
+            "additionalStates": 1,
+            "sops": 0 if s.get("gameopts") == "false" else 1,
+            # The host's stream keys; Moonlight's resume replaces them.
+            "rikey": os.urandom(16).hex(),
+            "rikeyid": int.from_bytes(os.urandom(4), "big") & 0x7FFFFFFF,
+            "localAudioPlayMode": 1 if s.get("hostaudio") == "true" else 0,
+            "surroundAudioInfo": SURROUND_AUDIO_INFO.get(s.get("audiocfg", "0"), SURROUND_AUDIO_INFO["0"]),
+            "remoteControllersBitmap": 1,
+            "gcmap": 1,
+            "psmap": 0,
+            "gcpersist": 0,
+            "corever": 1,
+        }
+        if s.get("hdr") == "true":
+            params.update(
+                hdrMode=1,
+                clientHdrCapVersion=0,
+                clientHdrCapSupportedFlagsInUint32=0,
+                clientHdrCapMetaDataId="NV_STATIC_METADATA_TYPE_1",
+                clientHdrCapDisplayData="0x0x0x0x0x0x0x0x0x0x0",
+            )
+        return params
+
+
+def uuid_hex():
+    import uuid
+
+    return uuid.uuid4().hex
+
+
+def parse_host_xml(data):
+    """A GameStream reply's root element; HostRequestError if it's an error."""
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError as e:
+        raise HostRequestError(f"unreadable reply: {e}") from e
+    status = root.get("status_code", "200")
+    if status != "200":
+        raise HostRequestError(f"{root.get('status_message') or 'error'} ({status})")
+    return root
+
+
+def write_host_app(state, pending):
+    """The early start's state, with what quitting the app again needs."""
+    record = {
+        "state": state,
+        "created": pending.get("created"),
+        "pid": os.getpid(),
+        "host": (pending.get("stream") or {}).get("host"),
+        "conf": moonlight_conf(pending),
+    }
+    write_file(HOST_APP, json.dumps(record))
+
+
+def start_host_app():
+    """Start the staged stream's app on the host (run by the Decky backend
+    right after --prepare, in Gaming Mode). Leaves the outcome in HOST_APP."""
+    try:
+        with open(PENDING) as f:
+            pending = json.load(f)
+    except (OSError, ValueError):
+        return 1
+    stream = pending.get("stream") or {}
+    appid = pending.get("appid")
+    if not stream.get("host") or not appid:
+        return 1
+    write_host_app("starting", pending)
+    started = time.monotonic()
+    try:
+        client = MoonlightClient(moonlight_conf(pending), stream["host"])
+        current = client.request("serverinfo").findtext("currentgame") or "0"
+        if current == str(appid):
+            state, note = "running", "already running"
+        elif current != "0":
+            # Moonlight will ask whether to quit it.
+            state, note = "busy", f"another app ({current}) is running"
+        else:
+            client.request("launch", client.launch_params(appid), timeout=HOST_LAUNCH_TIMEOUT)
+            state, note = "started", "started"
+    except (HostRequestError, KeyError, ValueError) as e:
+        state, note = "failed", f"couldn't start it: {e}"
+    log(f"host app {stream.get('app', '').strip()!r} on {stream['host']}: {note} ({time.monotonic() - started:.1f}s)")
+    write_host_app(state, pending)
+    return 0
+
+
+def read_host_app():
+    try:
+        with open(HOST_APP) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def wait_for_host_app(created, on_wait=None):
+    """The early start's record for the launch staged at `created`, once it
+    has an outcome (None if there was none). Before Moonlight runs: so it
+    finds the app running and resumes it instead of starting it again."""
+    deadline = time.monotonic() + HOST_APP_WAIT
+    waited = False
+    while True:
+        host_app = read_host_app()
+        if host_app is None or host_app.get("created") != created:
+            return None  # none, or from another launch
+        if host_app.get("state") != "starting" or not pid_alive(host_app.get("pid")):
+            break
+        if time.monotonic() >= deadline:
+            log("host still starting the app, going ahead anyway")
+            break
+        if not waited and on_wait:
+            on_wait()
+        waited = True
+        time.sleep(0.1)
+    if waited:
+        log(f"waited {HOST_APP_WAIT - (deadline - time.monotonic()):.1f}s for the host: {host_app.get('state')}")
+    return host_app
+
+
+def pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+    except (OSError, TypeError, ValueError):
+        return False
+    return True
+
+
+def quit_host_app():
+    """Undo an early start whose session never came (the launch was cancelled)."""
+    host_app = read_host_app()
+    if host_app is None:
+        return 0
+    # Quitting before the host has finished starting it would be too early.
+    host_app = wait_for_host_app(host_app.get("created")) or {}
+    remove(HOST_APP)
+    if host_app.get("state") != "started":
+        return 0
+    try:
+        MoonlightClient(host_app["conf"], host_app["host"]).request("cancel")
+        log("launch cancelled, quit the app on the host")
+    except (HostRequestError, KeyError, TypeError) as e:
+        log(f"launch cancelled, couldn't quit the app on the host: {e}")
+    return 0
+
+
 # Moonlight's output while a `stream` launch connects. The loading screen
 # shows the same steps Moonlight's own screen would.
 STREAM_HOST_FOUND = re.compile(r'Qt Info: ".*" is now online at')
 # Asking the host to start (or resume) the app, or to quit the one it's running.
 STREAM_REQUEST = re.compile(r'Executing request: "https?://[^/]+/(launch|resume|cancel)\?')
-# Connection steps, as Moonlight's screen shows them ("Starting RTSP handshake...").
+# Connection steps as Moonlight logs them, and as its screen names them
+# ("Starting RTSP handshake...").
 STREAM_STEP = re.compile(r"SDL Info \(\d+\): ((?:Initializing|Resolving|Starting) [\w ]+?)\.\.\.$")
+STREAM_STEP_NAMES = {
+    "Initializing platform": "platform initialization",
+    "Resolving host name": "name resolution",
+    "Initializing audio stream": "audio stream initialization",
+    "Starting RTSP handshake": "RTSP handshake",
+    "Initializing control stream": "control stream initialization",
+    "Initializing video stream": "video stream initialization",
+    "Initializing input stream": "input stream initialization",
+    "Starting control stream": "control stream establishment",
+    "Starting video stream": "video stream establishment",
+    "Starting audio stream": "audio stream establishment",
+    "Starting input stream": "input stream establishment",
+}
 STREAM_LAST_STEP = "Starting input stream"
 STREAM_STARTED = re.compile(r"Video stream is \d+x\d+")
 # With another app running on the host, Moonlight asks whether to quit it
@@ -1841,6 +2217,9 @@ STREAM_QUESTION_WAIT = 3
 # The picture, about 0.7 s after the stream starts; until then Moonlight shows
 # its own loading screen (its last connection steps).
 STREAM_FIRST_VIDEO = "Received first video packet"
+# The user quitting the stream with Moonlight's combo (Start+Select+L1+R1, or
+# Ctrl+Alt+Shift+Q): Moonlight exits about 0.2 s later.
+STREAM_QUIT = re.compile(r"Detected quit (?:gamepad button|key) combo")
 STREAM_FAILED = re.compile(r"Qt Critical:")
 STREAM_TERMINATED = re.compile(r"Connection terminated: (-?\d+)")
 # Longest the loading screen waits for video before showing Moonlight anyway.
@@ -1857,30 +2236,36 @@ RECONNECT_DELAY = 2
 
 class LoadingHold:
     """Closes the loading screen once every reason to keep it up has gone,
-    e.g. the network settling and the stream starting."""
+    e.g. the network settling and the stream starting. Like Moonlight's own
+    screen, the headline (`title`) stays put and the step under way shows
+    beneath it."""
 
-    def __init__(self, loading, reasons):
+    def __init__(self, loading, reasons, title=""):
         self.loading = loading
-        # Each reason's latest loading-screen text ("" keeps the current one).
+        self.title = title
+        # Each reason's latest step ("" keeps the current one).
         self.reasons = dict.fromkeys(reasons, "")
         self.lock = threading.Lock()
 
-    def status(self, reason, text):
+    def text(self, step):
+        return f"{self.title}\n{step}" if self.title else step
+
+    def status(self, reason, step):
         with self.lock:
             if reason not in self.reasons:
                 return
-            self.reasons[reason] = text
-        write_file(LOADING_STATUS, text)
+            self.reasons[reason] = step
+        write_file(LOADING_STATUS, self.text(step))
 
     def release(self, reason):
         with self.lock:
             if reason not in self.reasons:
                 return  # already released (e.g. video started, then Moonlight exited)
             del self.reasons[reason]
-            remaining = [text for text in self.reasons.values() if text]
+            remaining = [step for step in self.reasons.values() if step]
             if self.reasons:
                 if remaining:
-                    write_file(LOADING_STATUS, remaining[-1])
+                    write_file(LOADING_STATUS, self.text(remaining[-1]))
                 return
         write_file(LOADING_STATUS, "")
         close_loading_screen(self.loading)
@@ -2428,6 +2813,85 @@ def close_loading_screen(proc):
         proc.kill()
 
 
+class ReturningScreen:
+    """The "Returning to Gaming Mode…" screen, shown once: as soon as the user quits the
+    stream (before Moonlight has closed its windows), or when the app exits.
+    An overlay, so nothing closing underneath shows through; the logout
+    closes it."""
+
+    MESSAGE = "Returning to Gaming Mode…"
+
+    def __init__(self, enabled):
+        self.enabled = enabled
+        self.shown = False
+        self.lock = threading.Lock()
+        self.reveal = threading.Event()
+        self.proc = self.server = None
+
+    def prepare_later(self):
+        """Start the hidden screen a little into the session."""
+        if self.enabled:
+            timer = threading.Timer(RETURNING_PREPARE_DELAY, self.prepare)
+            timer.daemon = True
+            timer.start()
+
+    def prepare(self):
+        qml = shutil.which("qml6") or shutil.which("qml")
+        with self.lock:
+            if self.shown or self.proc or not qml:
+                return
+            try:
+                self.server = self.serve()
+                url = f"http://127.0.0.1:{self.server.server_address[1]}/"
+                path = os.path.join(STATE, "returning.qml")
+                write_file(
+                    path,
+                    RETURNING_QML
+                    % {
+                        "title": json.dumps(RETURNING_TITLE),
+                        "message": json.dumps(self.MESSAGE),
+                        "url": json.dumps(url),
+                    },
+                )
+                env = dict(os.environ, QT_WAYLAND_SHELL_INTEGRATION="layer-shell")
+                self.proc = subprocess.Popen([qml, path], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except OSError as e:
+                log(f"returning screen failed to start: {e}")
+
+    def serve(self):
+        reveal = self.reveal
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                # Answered at once when it's time to show, otherwise asked again.
+                body = b"show" if reveal.wait(timeout=OSD_POLL_TIMEOUT) else b"wait"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return server
+
+    def show(self):
+        with self.lock:
+            if not self.enabled or self.shown:
+                return
+            self.shown = True
+            ready = self.proc is not None and self.proc.poll() is None
+        if ready:
+            self.reveal.set()
+        else:
+            # Not started yet (a quit in the first seconds): start one shown.
+            show_loading_screen(self.MESSAGE, still=True, overlay=True)
+
+
 def unload_session_script():
     dbus("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting.unloadScript", f"string:{KWIN_SCRIPT_NAME}")
 
@@ -2448,7 +2912,7 @@ def steam_game_running(appid):
     return False
 
 
-def watch_stream(proc, hold, stream, started, on_drop=None):
+def watch_stream(proc, hold, stream, started, on_drop=None, question_wait=None, on_quit=None):
     """Follow Moonlight's output during a `stream` launch: pass it through to
     the journal, and keep the loading screen up until the first video arrives.
 
@@ -2456,9 +2920,8 @@ def watch_stream(proc, hold, stream, started, on_drop=None):
     termination code (None: a reconnect attempt that failed to connect) and
     whether video had started; it returns True if it reconnects, and the
     loading screen then stays for the next attempt."""
-    host, app = stream.get("host", "the host"), stream.get("app", "").strip() or "the stream"
-    connecting, starting = f"Connecting to {host}…", f"Starting {app}…"
-    hold.status("stream", connecting)
+    host = stream.get("host", "the host")
+    hold.status("stream", f"Connecting to {host}…")
     timer = threading.Timer(STREAM_WAIT, hold.release, ["stream"])
     timer.daemon = True
     timer.start()
@@ -2475,26 +2938,33 @@ def watch_stream(proc, hold, stream, started, on_drop=None):
         sys.stdout.flush()
         line = line.rstrip("\n")
         if STREAM_HOST_FOUND.search(line):
-            hold.status("stream", f"{connecting}\nLoading app list…")
+            hold.status("stream", "Loading app list…")
             if question is None:
-                question = threading.Timer(STREAM_QUESTION_WAIT, show_question)
+                wait = STREAM_QUESTION_WAIT if question_wait is None else question_wait
+                question = threading.Timer(wait, show_question)
                 question.daemon = True
                 question.start()
         elif request := STREAM_REQUEST.search(line):
             if question:
                 question.cancel()
             if request.group(1) == "cancel":
-                hold.status("stream", f"{connecting}\nQuitting the running app…")
+                hold.status("stream", "Quitting the running app…")
             else:
-                hold.status("stream", starting)
+                # The host starts the app (or picks it up) before answering.
+                hold.status("stream", f"Waiting for {host}…")
         elif m := STREAM_STEP.search(line):
             step = m.group(1)
-            hold.status("stream", f"{starting}\n{step}…")
+            hold.status("stream", f"Starting {STREAM_STEP_NAMES.get(step, step)}…")
         elif step == STREAM_LAST_STEP and line.endswith("done"):
             step = None
-            hold.status("stream", f"{starting}\nWaiting for video…")
+            hold.status("stream", "Waiting for video…")
         elif STREAM_STARTED.search(line):
             video = True
+        elif STREAM_QUIT.search(line):
+            # Moonlight closes its windows next; cover them first.
+            log("stream quit")
+            if on_quit:
+                on_quit()
         elif STREAM_FIRST_VIDEO in line:
             log(f"stream started {time.monotonic() - started:.1f}s after launch")
             hold.release("stream")
@@ -2524,6 +2994,7 @@ class StreamReconnect:
 
     def __init__(self, stream):
         self.host = stream.get("host") or "the host"
+        self.app = (stream.get("app") or "").strip() or "the stream"
         self.proc = None
         self.hold = None
         self.deadline = None  # while reconnecting: when to give up
@@ -2546,7 +3017,9 @@ class StreamReconnect:
         # Cover Moonlight's error before closing it (a drop before video still
         # has its loading screen up).
         if self.hold is None or "stream" not in self.hold.reasons:
-            self.hold = LoadingHold(show_loading_screen(f"Reconnecting to {self.host}…", overlay=True), ["stream"])
+            # Same layout as the launch's: what's happening, then the step.
+            title = f"Reconnecting to {self.app}…"
+            self.hold = LoadingHold(show_loading_screen(title, overlay=True), ["stream"], title=title)
         threading.Thread(target=close_app, args=(self.proc,), daemon=True).start()
         return True
 
@@ -2659,7 +3132,7 @@ class MoonlightPriority(threading.Thread):
         self.stopped.set()
 
 
-def run_direct(pending, background_steam=False, hold=None):
+def run_direct(pending, background_steam=False, hold=None, on_quit=None):
     cwd = pending.get("cwd")
     if cwd and not os.path.isdir(cwd):
         log(f"start dir {cwd!r} missing, using home")
@@ -2668,6 +3141,16 @@ def run_direct(pending, background_steam=False, hold=None):
     if stream and hold is None:
         hold = LoadingHold(None, ["stream"])  # still follow the stream, just without a loading screen
     reconnect = StreamReconnect(stream) if stream and pending.get("reconnect_streams", True) else None
+    host_app = None
+    if stream:
+        host = stream.get("host", "the host")
+        host_app = (
+            wait_for_host_app(
+                pending.get("created"),
+                on_wait=lambda: hold.status("stream", f"Waiting for {host}…"),
+            )
+            or {}
+        ).get("state")
     first = True
     while True:
         log(f"exec: {pending['command']}")
@@ -2684,9 +3167,11 @@ def run_direct(pending, background_steam=False, hold=None):
         if stream:
             if reconnect:
                 reconnect.proc, reconnect.hold, reconnect.dropped = proc, hold, False
+            # Another app on the host: Moonlight will ask about it straight away.
             watcher = threading.Thread(
                 target=watch_stream,
                 args=(proc, hold, stream, started, reconnect.on_drop if reconnect else None),
+                kwargs={"question_wait": 0 if first and host_app == "busy" else None, "on_quit": on_quit},
                 daemon=True,
             )
             watcher.start()
@@ -2907,7 +3392,7 @@ def launch():
         hold_reasons.append("network")
     if held_stream:
         hold_reasons.append("stream")
-    hold = LoadingHold(loading, hold_reasons) if loading and hold_reasons else None
+    hold = LoadingHold(loading, hold_reasons, title=starting) if loading and hold_reasons else None
     hold_loading = hold is not None
 
     script = bool(
@@ -2949,6 +3434,8 @@ def launch():
     combo = BrightnessCombo(osd, keeper, on_tap=battery.show_status if battery else None)
     combo.start()
     returning = pending.get("return_to_gaming")
+    returning_screen = ReturningScreen(returning)
+    returning_screen.prepare_later()
     if hold and "network" in hold.reasons:
         # Desktop Steam restarts NetworkManager (wpa_supplicant); otherwise
         # reconnect once ourselves so the access point lock applies.
@@ -2956,7 +3443,9 @@ def launch():
     try:
         log(f"launching {time.monotonic() - started:.1f}s after start")
         if pending.get("mode") in ("direct", "hybrid"):
-            run_direct(pending, background_steam=pending.get("mode") == "hybrid", hold=hold)
+            run_direct(
+                pending, background_steam=pending.get("mode") == "hybrid", hold=hold, on_quit=returning_screen.show
+            )
         else:
             # Steam's game process appearing is the fallback signal when the
             # KWin script couldn't load.
@@ -2965,9 +3454,8 @@ def launch():
         log(f"launch failed: {e!r}")
     finally:
         close_loading_screen(loading)
-        if returning:
-            # Covers the clean-up and logout; the logout closes it.
-            show_loading_screen("Returning to Gaming Mode…", still=True)
+        # Covers the clean-up and logout (if the stream's quit didn't already).
+        returning_screen.show()
         steam_shutdown = request_steam_shutdown() if returning else None
         combo.stop()
         if battery:
@@ -3115,6 +3603,10 @@ def main(argv):
     if command == "--moonlight-hosts":
         print(json.dumps(moonlight_hosts()))
         return 0
+    if command == "--start-host-app":
+        return start_host_app()
+    if command == "--quit-host-app":
+        return quit_host_app()
     if command == "--moonlight-settings":
         current = read_ini_section(moonlight_conf()) or {}
         values = {field: current.get(key) for field, key in MOONLIGHT_KEYS.items()}

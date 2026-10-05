@@ -339,6 +339,32 @@ async def _run_launcher(*args):
     return proc.returncode, out.decode(errors="replace").strip()
 
 
+_background = set()
+
+
+async def _start_launcher(*args):
+    """Run the launcher in the background: its own session, so the switch out
+    of Gaming Mode doesn't take it along."""
+    launcher = _paths()["launcher"]
+    python = "/usr/bin/python3" if os.path.exists("/usr/bin/python3") else (_which("python3") or "python3")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            python,
+            launcher,
+            *args,
+            env=_system_env(),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except OSError as e:
+        decky.logger.warning(f"launcher {' '.join(args)} failed to start: {e}")
+        return
+    task = asyncio.ensure_future(proc.wait())  # reaped when it exits
+    _background.add(task)
+    task.add_done_callback(_background.discard)
+
+
 def _remove(path):
     try:
         os.remove(path)
@@ -688,6 +714,10 @@ class Plugin:
                 await self._cleanup()
                 return {"ok": False, "error": out or f"launcher --prepare exited {code}"}
 
+            if stream:
+                # The host starts the app while Gaming Mode hands over to the
+                # desktop; Moonlight then resumes it.
+                await _start_launcher("--start-host-app")
             decky.logger.info(f"Staged {mode} launch of {name} ({appid})")
             return {"ok": True, "mode": mode}
         except Exception as e:
@@ -728,6 +758,8 @@ class Plugin:
         return {"ok": True}
 
     async def cancel_pending(self):
+        # An app the host started early for this launch is quit again.
+        await _start_launcher("--quit-host-app")
         await self._cleanup()
 
     async def _main(self):

@@ -1136,13 +1136,14 @@ class StreamLaunch(LauncherTestCase):
     def test_hold_closes_after_every_reason(self):
         closed = []
         self.l.close_loading_screen = closed.append
-        hold = self.l.LoadingHold("loading", ["network", "stream"])
+        hold = self.l.LoadingHold("loading", ["network", "stream"], title="Starting Desktop…")
         hold.status("network", "Waiting for the network…")
-        hold.status("stream", "Starting Desktop…")
+        hold.status("stream", "Connecting to star…")
         hold.release("network")
         self.assertEqual(closed, [])
+        # The headline stays; the step under way goes beneath it.
         with open(self.l.LOADING_STATUS) as f:
-            self.assertEqual(f.read(), "Starting Desktop…")
+            self.assertEqual(f.read(), "Starting Desktop…\nConnecting to star…")
         hold.release("stream")
         self.assertEqual(closed, ["loading"])
 
@@ -1189,16 +1190,17 @@ class StreamLaunch(LauncherTestCase):
                 "00:00:04 - SDL Info (0): Starting audio stream...\n",
             ]
         )
+        # The steps, in the words of Moonlight's own screen.
         self.assertEqual(
             statuses[:7],
             [
                 "Connecting to star…",
-                "Connecting to star…\nLoading app list…",
-                "Starting Resume…",
-                "Starting Resume…\nStarting RTSP handshake…",
-                "Starting Resume…\nStarting video stream…",
-                "Starting Resume…\nStarting input stream…",
-                "Starting Resume…\nWaiting for video…",
+                "Loading app list…",
+                "Waiting for star…",
+                "Starting RTSP handshake…",
+                "Starting video stream establishment…",
+                "Starting input stream establishment…",
+                "Waiting for video…",
             ],
         )
         # Up until the first video, whatever comes after.
@@ -1225,6 +1227,60 @@ class StreamLaunch(LauncherTestCase):
         )
         self.assertEqual((self.released_at, closed), ([2], ["loading"]))
 
+    def test_quitting_the_stream_covers_moonlight_closing(self):
+        quits = []
+        closed, hold = [], self.l.LoadingHold("loading", ["stream"])
+        self.l.close_loading_screen = closed.append
+
+        class Proc:
+            stdout = iter(
+                [
+                    "00:00:03 - SDL Info (0): Received first video packet after 300 ms\n",
+                    # Quickscope closing Moonlight to reconnect isn't the user quitting.
+                    "00:00:05 - SDL Info (0): Quit event received\n",
+                    "00:00:07 - SDL Info (0): Detected quit gamepad button combo\n",
+                    "00:00:07 - SDL Info (0): Quit event received\n",
+                    "00:00:07 - SDL Info (0): Stopping input stream...\n",
+                ]
+            )
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.l.watch_stream(Proc, hold, {"host": "star"}, time.monotonic(), on_quit=lambda: quits.append(1))
+        self.assertEqual(quits, [1])
+
+    def test_returning_screen_shows_once(self):
+        # Not prepared yet (a quit in the session's first seconds): one is started.
+        shown = []
+        self.l.show_loading_screen = lambda message, still=False, overlay=False: shown.append((message, overlay))
+        screen = self.l.ReturningScreen(True)
+        screen.show()
+        screen.show()  # Moonlight exiting after the quit
+        self.assertEqual(shown, [("Returning to Gaming Mode…", True)])
+        self.l.ReturningScreen(False).show()  # staying in the desktop
+        self.assertEqual(len(shown), 1)
+
+    def test_prepared_returning_screen_is_revealed_at_once(self):
+        shown = []
+        self.l.show_loading_screen = lambda *args, **kwargs: shown.append(args)
+        screen = self.l.ReturningScreen(True)
+        screen.server = screen.serve()
+        self.addCleanup(screen.server.shutdown)
+
+        class Running:
+            def poll(self):
+                return None
+
+        screen.proc = Running()
+        url = f"http://127.0.0.1:{screen.server.server_address[1]}/"
+        answer = []
+        waiting = threading.Thread(target=lambda: answer.append(urllib.request.urlopen(url, timeout=5).read()))
+        waiting.start()  # the hidden screen's long poll
+        time.sleep(0.1)
+        self.assertEqual(answer, [])
+        screen.show()
+        waiting.join(timeout=5)
+        self.assertEqual((answer, shown), ([b"show"], []))
+
     def test_watcher_hands_over_on_failure(self):
         _, closed = self.run_watcher(["00:00:01 - Qt Critical: Network unreachable (Error 99)\n"])
         self.assertEqual(closed, ["loading"])
@@ -1247,7 +1303,7 @@ class StreamLaunch(LauncherTestCase):
         self.assertEqual((shown, reconnect.dropped), ([], False))
         self.assertTrue(reconnect.on_drop(-1, True))  # connection lost mid-stream
         time.sleep(0.05)
-        self.assertEqual((shown, closed_apps, reconnect.dropped), (["Reconnecting to star…"], ["moonlight"], True))
+        self.assertEqual((shown, closed_apps, reconnect.dropped), (["Reconnecting to Desktop…"], ["moonlight"], True))
         # Retries that fail to connect keep going until the window runs out.
         self.assertTrue(reconnect.on_drop(None, False))
         reconnect.deadline = time.monotonic() - 1
@@ -1426,6 +1482,148 @@ class Uninstall(LauncherTestCase):
     def test_nothing_left_means_no_state_folder(self):
         self.l.uninstall()
         self.assertFalse(os.path.exists(self.l.STATE))
+
+
+# What Moonlight saves: PEMs as QSettings byte arrays (the certificate quoted).
+HOST_APP_CONF = r"""[General]
+certificate="@ByteArray(-----BEGIN CERTIFICATE-----\nCLIENT\n-----END CERTIFICATE-----\n)"
+key=@ByteArray(-----BEGIN PRIVATE KEY-----\nSECRET\n-----END PRIVATE KEY-----\n)
+uniqueid=6a5a2c96a4c0eb6d
+width=1920
+height=1200
+fps=60
+hdr=false
+audiocfg=0
+gameopts=true
+hostaudio=false
+
+[hosts]
+1\hostname=star
+1\localaddress=192.168.1.73
+1\localport=47989
+1\manualaddress=
+1\manualport=0
+1\ipv6address=[2600:1701::41]
+1\ipv6port=47989
+1\srvcert=@ByteArray(-----BEGIN CERTIFICATE-----\nSERVER\n-----END CERTIFICATE-----\n)
+size=1
+"""
+
+
+class HostAppStart(LauncherTestCase):
+    def setUp(self):
+        super().setUp()
+        self.conf = os.path.join(self.home, "Moonlight.conf")
+        self.l.write_file(self.conf, HOST_APP_CONF)
+        self.pending = {"created": 1234.5, "appid": 749207497, "stream": {"host": "star", "app": "     Desktop"}}
+        self.l.write_file(self.l.PENDING, json.dumps(self.pending))
+        self.l.moonlight_conf = lambda pending=None: self.conf
+        self.requests = []
+
+    def fake_client(self, current="0", fail=None):
+        test = self
+
+        class Client:
+            def __init__(self, conf, name):
+                self.conf, self.name = conf, name
+
+            def request(self, path, params=None, timeout=None):
+                test.requests.append((path, params))
+                if fail == path:
+                    raise test.l.HostRequestError("refused (500)")
+                return test.l.parse_host_xml(f"<root status_code='200'><currentgame>{current}</currentgame></root>")
+
+            def launch_params(self, appid):
+                return {"appid": appid}
+
+        self.l.MoonlightClient = Client
+
+    def test_reads_moonlights_pairing(self):
+        client = self.l.MoonlightClient(self.conf, "star")
+        self.assertEqual(client.cert, "-----BEGIN CERTIFICATE-----\nCLIENT\n-----END CERTIFICATE-----\n")
+        self.assertEqual(client.key, "-----BEGIN PRIVATE KEY-----\nSECRET\n-----END PRIVATE KEY-----\n")
+        self.assertIn("SERVER", client.server_cert)
+        self.assertEqual(client.addresses, [("192.168.1.73", 47989), ("2600:1701::41", 47989)])
+        with self.assertRaises(self.l.HostRequestError):
+            self.l.MoonlightClient(self.conf, "moon")
+
+    def test_launch_params_match_moonlights(self):
+        params = self.l.MoonlightClient(self.conf, "star").launch_params(749207497)
+        self.assertEqual(
+            {k: v for k, v in params.items() if k not in ("rikey", "rikeyid")},
+            {
+                "appid": 749207497,
+                "mode": "1920x1200x60",
+                "additionalStates": 1,
+                "sops": 1,
+                "localAudioPlayMode": 0,
+                "surroundAudioInfo": 196610,
+                "remoteControllersBitmap": 1,
+                "gcmap": 1,
+                "psmap": 0,
+                "gcpersist": 0,
+                "corever": 1,
+            },
+        )
+        self.assertRegex(params["rikey"], r"^[0-9a-f]{32}$")
+
+    def test_host_errors(self):
+        with self.assertRaises(self.l.HostRequestError):
+            self.l.parse_host_xml(b'<root status_code="410" status_message="An app is already running."/>')
+        with self.assertRaises(self.l.HostRequestError):
+            self.l.parse_host_xml(b"not xml")
+
+    def outcome(self):
+        return self.l.read_host_app()["state"]
+
+    def test_starts_the_app_when_nothing_is_running(self):
+        self.fake_client("0")
+        self.l.start_host_app()
+        self.assertEqual([r[0] for r in self.requests], ["serverinfo", "launch"])
+        self.assertEqual(self.outcome(), "started")
+
+    def test_leaves_a_running_app_alone(self):
+        self.fake_client("749207497")
+        self.l.start_host_app()
+        self.assertEqual(([r[0] for r in self.requests], self.outcome()), (["serverinfo"], "running"))
+        # Another app: Moonlight asks what to do, so nothing is quit here.
+        self.requests.clear()
+        self.fake_client("612858989")
+        self.l.start_host_app()
+        self.assertEqual(([r[0] for r in self.requests], self.outcome()), (["serverinfo"], "busy"))
+
+    def test_failure_is_recorded(self):
+        self.fake_client("0", fail="launch")
+        self.l.start_host_app()
+        self.assertEqual(self.outcome(), "failed")
+
+    def test_session_waits_for_the_start(self):
+        self.l.write_host_app("starting", self.pending)
+        # os.kill(pid, 0) checks a process on Linux but ends it on Windows.
+        self.l.pid_alive = lambda pid: True
+        self.l.HOST_APP_WAIT = 0.3
+        waits = []
+
+        def finish():
+            waits.append(True)
+            threading.Timer(0.1, self.l.write_host_app, ["started", self.pending]).start()
+
+        self.assertEqual(self.l.wait_for_host_app(1234.5, on_wait=finish)["state"], "started")
+        self.assertEqual(waits, [True])
+        # Another launch's record doesn't count.
+        self.assertIsNone(self.l.wait_for_host_app(999))
+
+    def test_cancelled_launch_quits_the_app_it_started(self):
+        self.fake_client()
+        self.l.write_host_app("started", self.pending)
+        self.l.quit_host_app()
+        self.assertEqual([r[0] for r in self.requests], ["cancel"])
+        self.assertIsNone(self.l.read_host_app())
+        # One it didn't start is left running.
+        self.requests.clear()
+        self.l.write_host_app("running", self.pending)
+        self.l.quit_host_app()
+        self.assertEqual(self.requests, [])
 
 
 if __name__ == "__main__":
