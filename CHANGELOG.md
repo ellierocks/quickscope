@@ -2,6 +2,13 @@
 
 Releases before 1.0.0 were pre-releases, tested on a Steam Deck LCD.
 
+## 1.3.0
+
+- **Faster stream starts:** when you pick a stream entry, Quickscope asks the host to start the app right away, while the Deck is still leaving Gaming Mode, and Moonlight then picks up the running app instead of starting it. Apps that take a moment to start on the host (Steam Big Picture took 1.8 s in testing) no longer add that time to the wait. It uses Moonlight's own pairing, never saved anywhere else. An app the host is already running is left alone, and a launch you cancel quits the app it started.
+- **The loading screen stays up until the picture arrives,** above Moonlight's windows, and follows Moonlight's own steps: one headline for the whole launch and the current step beneath it ("Starting RTSP handshake…", "Waiting for video…"). Before, Moonlight's own loading screen showed through at the end.
+- **Moonlight's questions aren't hidden:** when the host is running another app, Moonlight asks whether to quit it, and the loading screen now steps aside for that question instead of covering it.
+- **"Returning to Gaming Mode…" appears the moment you quit a stream,** so Moonlight's windows closing no longer flash on screen.
+
 ## 1.2.0
 
 - Stream entries stay up to date with the host: each time the panel opens, Quickscope asks your hosts for their current apps (through Moonlight itself, without opening it), so apps removed on the host disappear and new ones show up. Until now the list was whatever Moonlight's own window last saw. Apps hidden in Moonlight stay hidden, and a host that can't be reached keeps its last list.
