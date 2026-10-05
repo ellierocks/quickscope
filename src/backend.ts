@@ -152,6 +152,8 @@ export const getDisplays = callable<[], DisplayInfo | null>("get_displays");
 export const getMoonlightSettings = callable<[], MoonlightSettings | null>("get_moonlight_settings");
 export const saveDiagnostics = callable<[], string>("save_diagnostics");
 export const getMoonlightHosts = callable<[], MoonlightHost[]>("get_moonlight_hosts");
+/** Asks each host for its current apps (up to ~40 s for one that's offline). */
+export const refreshMoonlightHosts = callable<[shortcutExe: string | null], MoonlightHost[]>("refresh_moonlight_hosts");
 export const prepareLaunch = callable<[spec: LaunchSpec], Result>("prepare_launch");
 export const switchSession = callable<[], Result>("switch_session");
 export const cancelPending = callable<[], void>("cancel_pending");

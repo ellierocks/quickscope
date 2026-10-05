@@ -23,6 +23,7 @@ import {
   getEnvironment,
   getMoonlightHosts,
   getSettings,
+  refreshMoonlightHosts,
   MoonlightApp,
   MoonlightHost,
   saveDiagnostics,
@@ -32,7 +33,7 @@ import { patchGamePage } from "./gamepage";
 import { addLaunchingRoute } from "./launching";
 import { addMoonlightRoute, openMoonlightPage } from "./moonlight";
 import { MODE_NAMES, effectiveMode, launch, launchStream, toast } from "./launch";
-import { LibraryApp, getLibraryApps, getSteamBrightness } from "./library";
+import { LibraryApp, getLibraryApps, getShortcutDetails, getSteamBrightness } from "./library";
 
 const POWER_PROFILES: { data: PowerProfile; label: string; description: string }[] = [
   {
@@ -188,6 +189,20 @@ function Content() {
 
   // Quickscope is built for Moonlight: its shortcut(s) lead the panel.
   const moonlight = useMemo(() => apps.filter((a) => a.kind === "shortcut" && /moonlight/i.test(a.name)), [apps]);
+
+  // Moonlight.conf only has the apps Moonlight's own window last saw, so ask
+  // the hosts for their current ones each time the panel opens.
+  useEffect(() => {
+    let open = true;
+    (async () => {
+      const details = moonlight[0] && (await getShortcutDetails(moonlight[0].appid));
+      const fresh = await refreshMoonlightHosts(details ? details.exe : null);
+      if (open) setHosts(fresh);
+    })().catch((e) => console.error("Quickscope: refreshing Moonlight hosts failed", e));
+    return () => {
+      open = false;
+    };
+  }, [moonlight]);
 
   const pinned = useMemo(() => {
     const ids = settings?.favorites ?? [];

@@ -161,6 +161,56 @@ class PrepareLaunch(unittest.TestCase):
         self.assertNotIn("direct_nonsteam", self.plugin.settings)
 
 
+MOONLIGHT_LIST_CSV = """Name, ID, HDR Support, App Collection Game, Hidden, Direct Launch, Boxart URL
+"     Desktop",749207497,false,false,false,false,"https://host/a.png"
+"Secret",2,false,false,true,false,""
+"Cyberpunk, 2077",77,true,false,false,false,""
+"""
+
+
+class MoonlightHostApps(unittest.TestCase):
+    def setUp(self):
+        self.plugin = main.Plugin()
+        self.listed = []
+        conf_hosts = [{"name": "star", "uuid": "U", "apps": [{"id": 3, "name": "Old"}], "hidden": [77]}]
+
+        async def fake_launcher(*args):
+            return 0, json.dumps(conf_hosts)
+
+        async def fake_list(base, host):
+            self.listed.append(host)
+            return self.fresh
+
+        real = main._run_launcher, main._moonlight_list, main._moonlight_base
+        main._run_launcher, main._moonlight_list = fake_launcher, fake_list
+        main._moonlight_base = lambda exe=None: ["moonlight"]
+        self.addCleanup(lambda: setattr(main, "_moonlight_base", real[2]))
+        self.addCleanup(lambda: (setattr(main, "_run_launcher", real[0]), setattr(main, "_moonlight_list", real[1])))
+
+    def test_parse_keeps_exact_names_and_skips_hidden(self):
+        self.assertEqual(
+            main.parse_moonlight_list(MOONLIGHT_LIST_CSV),
+            [{"id": 749207497, "name": "     Desktop"}, {"id": 77, "name": "Cyberpunk, 2077"}],
+        )
+
+    def test_parse_without_csv_header_is_no_answer(self):
+        self.assertIsNone(main.parse_moonlight_list("Desktop\nSteam Big Picture\n"))
+        self.assertEqual(main.parse_moonlight_list(MOONLIGHT_LIST_CSV.splitlines()[0]), [])
+
+    def test_refresh_replaces_the_saved_apps_but_not_moonlights_hidden_ones(self):
+        self.fresh = main.parse_moonlight_list(MOONLIGHT_LIST_CSV)
+        hosts = asyncio.run(self.plugin.refresh_moonlight_hosts(None))
+        self.assertEqual(self.listed, ["star"])
+        self.assertEqual(hosts[0]["apps"], [{"id": 749207497, "name": "     Desktop"}])
+        # Later panel opens show the refreshed list straight away.
+        self.assertEqual(asyncio.run(self.plugin.get_moonlight_hosts())[0]["apps"], hosts[0]["apps"])
+
+    def test_unreachable_host_keeps_its_apps(self):
+        self.fresh = None
+        hosts = asyncio.run(self.plugin.refresh_moonlight_hosts(None))
+        self.assertEqual(hosts[0]["apps"], [{"id": 3, "name": "Old"}])
+
+
 class GamescopeWatchdog(unittest.TestCase):
     def run_states(self, states):
         calls, it = [], iter(states)

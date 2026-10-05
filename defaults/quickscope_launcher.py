@@ -1751,8 +1751,9 @@ def restore_moonlight(entry):
 
 def moonlight_hosts(path=None):
     """Hosts and their apps as Moonlight last saw them, from its settings:
-    [{"name", "uuid", "apps": [{"id", "name"}]}]. Addresses and certificates
-    are never read out. Apps hidden in Moonlight are left out."""
+    [{"name", "uuid", "apps": [{"id", "name"}], "hidden": [id]}]. Addresses
+    and certificates are never read out. Apps hidden in Moonlight are left out
+    of "apps"; their ids are kept so a fresh list from the host can skip them."""
     hosts = {}
     try:
         with open(path or moonlight_conf()) as f:
@@ -1783,7 +1784,10 @@ def moonlight_hosts(path=None):
             for a in host["apps"].values()
             if a.get("name") and a.get("hidden") != "true"
         ]
-        result.append({"name": host["hostname"], "uuid": host.get("uuid", ""), "apps": apps})
+        hidden = [
+            int(a["id"]) for a in host["apps"].values() if a.get("hidden") == "true" and a.get("id", "").isdigit()
+        ]
+        result.append({"name": host["hostname"], "uuid": host.get("uuid", ""), "apps": apps, "hidden": hidden})
     return result
 
 

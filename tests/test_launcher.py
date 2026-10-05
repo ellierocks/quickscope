@@ -1123,6 +1123,7 @@ class StreamLaunch(LauncherTestCase):
                     "name": "star",
                     "uuid": "D2A7582E",
                     "apps": [{"id": 749207497, "name": "     Desktop"}, {"id": 3, "name": "Steam Big Picture"}],
+                    "hidden": [2],
                 }
             ],
         )

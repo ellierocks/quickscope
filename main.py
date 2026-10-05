@@ -167,25 +167,103 @@ def _is_appimage(path):
         return False
 
 
-def _moonlight_stream_command(host, app, shortcut_exe=None, shortcut_options=None):
-    """Moonlight's `stream <host> <app>` command: the AppImage the Moonlight
-    shortcut runs, else the Flatpak (user or system install), else a native
+def _moonlight_base(shortcut_exe=None):
+    """The command that runs Moonlight: the AppImage the Moonlight shortcut
+    runs, else the Flatpak (user or system install), else a native
     `moonlight`. None if none is installed."""
-    stream = shlex.join(["stream", host, app])
     if shortcut_exe and _is_appimage(_strip_quotes(shortcut_exe)):
-        # The shortcut's launch options too (env vars, Moonlight's own options).
-        return f"{build_direct_command(shortcut_exe, shortcut_options)} {stream}"
+        return [_strip_quotes(shortcut_exe)]
     flatpak_dirs = [
         os.path.join(decky.DECKY_USER_HOME, ".local", "share", "flatpak", "app", MOONLIGHT_FLATPAK),
         os.path.join("/var/lib/flatpak/app", MOONLIGHT_FLATPAK),
     ]
     if any(os.path.isdir(d) for d in flatpak_dirs) and _which("flatpak"):
-        base = ["flatpak", "run", MOONLIGHT_FLATPAK]
-    elif _which("moonlight"):
-        base = ["moonlight"]
-    else:
+        return ["flatpak", "run", MOONLIGHT_FLATPAK]
+    if _which("moonlight"):
+        return ["moonlight"]
+    return None
+
+
+def _moonlight_stream_command(host, app, shortcut_exe=None, shortcut_options=None):
+    """Moonlight's `stream <host> <app>` command, None if Moonlight isn't installed."""
+    stream = shlex.join(["stream", host, app])
+    if shortcut_exe and _is_appimage(_strip_quotes(shortcut_exe)):
+        # The shortcut's launch options too (env vars, Moonlight's own options).
+        return f"{build_direct_command(shortcut_exe, shortcut_options)} {stream}"
+    base = _moonlight_base()
+    return base and f"{shlex.join(base)} {stream}"
+
+
+# Moonlight gives up finding a host after 30 s.
+MOONLIGHT_LIST_TIMEOUT = 40
+MOONLIGHT_LIST_HEADER = "Name, ID,"
+# `list --csv` rows: "name",id,hdr,app collection game,hidden,direct launch,"boxart url".
+MOONLIGHT_LIST_ROW = re.compile(r'"(.*?)",(\d+),([^,]*),([^,]*),([^,]*),')
+
+
+def parse_moonlight_list(out):
+    """Visible apps [{id, name}] from `moonlight list --csv`, None if that's
+    not what it printed (e.g. an older Moonlight without --csv)."""
+    lines = out.splitlines()
+    if not any(line.startswith(MOONLIGHT_LIST_HEADER) for line in lines):
         return None
-    return f"{shlex.join(base)} {stream}"
+    apps = []
+    for line in lines:
+        m = MOONLIGHT_LIST_ROW.match(line)
+        if m and m.group(5) != "true":
+            apps.append({"id": int(m.group(2)), "name": m.group(1)})
+    return apps
+
+
+def _steam_display():
+    """The X display Steam runs on (Gamescope's Xwayland), ":0" if not found."""
+    uid, _ = _user()
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            if os.stat(f"/proc/{pid}").st_uid != uid:
+                continue
+            with open(f"/proc/{pid}/comm") as f:
+                if f.read().strip() != "steam":
+                    continue
+            with open(f"/proc/{pid}/environ", "rb") as f:
+                env = dict(v.split(b"=", 1) for v in f.read().split(b"\0") if b"=" in v)
+        except OSError:
+            continue
+        if env.get(b"DISPLAY"):
+            return env[b"DISPLAY"].decode(errors="replace")
+    return ":0"
+
+
+async def _moonlight_list(base, host):
+    """The host's current apps, asked for by Moonlight itself (its pairing,
+    no window), or None if it couldn't be reached."""
+    env = _system_env()
+    # No window is opened, but Qt still wants a platform to start on. xcb is
+    # the one every build has (AppImages lack "offscreen").
+    env["QT_QPA_PLATFORM"] = "xcb"
+    env.setdefault("DISPLAY", _steam_display())
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *base,
+            "list",
+            host,
+            "--csv",
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+    except OSError as e:
+        decky.logger.warning(f"moonlight list {host} failed: {e}")
+        return None
+    try:
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=MOONLIGHT_LIST_TIMEOUT)
+    except TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return None
+    if proc.returncode != 0:
+        return None
+    return parse_moonlight_list(out.decode(errors="replace"))
 
 
 def _launcher_source():
@@ -376,6 +454,10 @@ class Plugin:
     def __init__(self):
         self.settings = dict(SETTINGS_DEFAULTS)
         self._gamescope_watchdog = None
+        # {host name: apps} as the host last listed them; Moonlight.conf only
+        # catches up when Moonlight's own window visits the host.
+        self._host_apps = {}
+        self._hosts_refresh = None
 
     def _settings_path(self):
         return os.path.join(decky.DECKY_PLUGIN_SETTINGS_DIR, "settings.json")
@@ -468,14 +550,41 @@ class Plugin:
             return None
 
     async def get_moonlight_hosts(self):
-        """Moonlight's saved hosts and their apps: [{name, uuid, apps: [{id, name}]}]."""
+        """Moonlight's saved hosts and their apps: [{name, uuid, apps: [{id, name}]}],
+        with the apps from the last refresh where there was one."""
         code, out = await _run_launcher("--moonlight-hosts")
         if code != 0:
             return []
         try:
-            return json.loads(out.splitlines()[-1])
+            hosts = json.loads(out.splitlines()[-1])
         except (ValueError, IndexError):
             return []
+        for host in hosts:
+            fresh = self._host_apps.get(host["name"])
+            if fresh is not None:
+                # Apps hidden in Moonlight stay hidden.
+                hidden = set(host.get("hidden", []))
+                host["apps"] = [a for a in fresh if a["id"] not in hidden]
+        return hosts
+
+    async def refresh_moonlight_hosts(self, shortcut_exe=None):
+        """Ask every saved host for its current apps, then get_moonlight_hosts().
+        Hosts that can't be reached keep the apps they had. One refresh at a
+        time; a second call waits for the running one."""
+        if self._hosts_refresh is None or self._hosts_refresh.done():
+            self._hosts_refresh = asyncio.ensure_future(self._refresh_host_apps(shortcut_exe))
+        await asyncio.shield(self._hosts_refresh)
+        return await self.get_moonlight_hosts()
+
+    async def _refresh_host_apps(self, shortcut_exe):
+        base = _moonlight_base(shortcut_exe)
+        if base is None:
+            return
+        names = [h["name"] for h in await self.get_moonlight_hosts()]
+        lists = await asyncio.gather(*(_moonlight_list(base, name) for name in names))
+        for name, apps in zip(names, lists, strict=True):
+            if apps is not None:
+                self._host_apps[name] = apps
 
     async def save_diagnostics(self):
         """Write a shareable report to ~/Downloads for bug reports. Returns its path."""
