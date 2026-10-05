@@ -457,11 +457,14 @@ LOADING_OVERLAY = """\
     LayerShell.Window.exclusionZone: -1
     LayerShell.Window.scope: "quickscope-loading\""""
 RETURNING_TITLE = "Quickscope Returning"
-# The returning screen, started hidden during the session: a new QML process
-# takes longer to draw its first frame than Moonlight takes to close its
-# windows after a quit (about 0.2 s). Like the OSD, it waits on a long poll
-# rather than polling, and the answer shows it at once. It looks like the
-# loading screen's still version.
+# The returning screen, ready during the session: Moonlight closes its
+# windows within 0.1 s of a quit, faster than a new window (or a hidden one
+# shown for the first time) gets its first frame on screen. So it's drawn
+# from the start in the background layer, under the fullscreen app where
+# nothing sees it (and the app can still go straight to the display), and
+# raised to the overlay layer when it's time. Like the OSD, it waits on a
+# long poll rather than polling. It looks like the loading screen's still
+# version.
 RETURNING_QML = """\
 import QtQuick
 import QtQuick.Window
@@ -470,9 +473,10 @@ import org.kde.layershell 1.0 as LayerShell
 Window {
     id: screen
     title: %(title)s
-    visible: false
+    visible: true
     color: "black"
-    LayerShell.Window.layer: LayerShell.Window.LayerOverlay
+    property bool shown: false
+    LayerShell.Window.layer: shown ? LayerShell.Window.LayerOverlay : LayerShell.Window.LayerBackground
     LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom
                                | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
     LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
@@ -500,6 +504,9 @@ Window {
             height: 4
             radius: 2
             color: "#1a9fff"
+            // A change to draw: the new layer only applies with the next
+            // frame, and an unchanged window draws none.
+            opacity: screen.shown ? 1 : 0.99
             anchors.horizontalCenter: parent.horizontalCenter
         }
     }
@@ -510,13 +517,28 @@ Window {
         var xhr = new XMLHttpRequest();
         xhr.onreadystatechange = function() {
             if (xhr.readyState !== XMLHttpRequest.DONE) return;
-            if (xhr.responseText === "show") screen.visible = true;
+            if (xhr.responseText === "show") screen.shown = true;
             else if (xhr.status === 200) screen.poll();
             else retry.start();
         };
         xhr.open("GET", %(url)s);
         xhr.send();
     }
+
+    // Tells the launcher, for its log.
+    function report(what) {
+        var xhr = new XMLHttpRequest();
+        xhr.open("GET", %(url)s + what);
+        xhr.send();
+    }
+
+    property bool readyReported: false
+    property bool raisedReported: false
+    onFrameSwapped: {
+        if (!readyReported) { readyReported = true; report("ready"); }
+        if (shown && !raisedReported) { raisedReported = true; report("raised"); }
+    }
+    onShownChanged: requestUpdate()
 
     Component.onCompleted: poll()
 }
@@ -2828,6 +2850,7 @@ class ReturningScreen:
         self.shown = False
         self.lock = threading.Lock()
         self.reveal = threading.Event()
+        self.revealed_at = time.monotonic()
         self.proc = self.server = None
 
     def prepare_later(self):
@@ -2861,12 +2884,20 @@ class ReturningScreen:
                 log(f"returning screen failed to start: {e}")
 
     def serve(self):
+        screen = self
         reveal = self.reveal
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
-                # Answered at once when it's time to show, otherwise asked again.
-                body = b"show" if reveal.wait(timeout=OSD_POLL_TIMEOUT) else b"wait"
+                if self.path == "/ready":
+                    log("returning screen ready")
+                    body = b"ok"
+                elif self.path == "/raised":
+                    log(f"returning screen raised {time.monotonic() - screen.revealed_at:.2f}s after the quit")
+                    body = b"ok"
+                else:
+                    # Answered at once when it's time to show, otherwise asked again.
+                    body = b"show" if reveal.wait(timeout=OSD_POLL_TIMEOUT) else b"wait"
                 self.send_response(200)
                 self.send_header("Content-Type", "text/plain")
                 self.send_header("Content-Length", str(len(body)))
@@ -2888,6 +2919,7 @@ class ReturningScreen:
             self.shown = True
             ready = self.proc is not None and self.proc.poll() is None
         if ready:
+            self.revealed_at = time.monotonic()
             self.reveal.set()
         else:
             # Not started yet (a quit in the first seconds): start one shown.
