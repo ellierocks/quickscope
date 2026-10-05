@@ -257,10 +257,11 @@ function activate(w) {
     if ("activeWindow" in workspace) workspace.activeWindow = w;
     else workspace.activeClient = w;
 }
-// Whatever should be in front: a held loading screen, otherwise the app.
+// Whatever should be in front: a held loading screen, otherwise the app. A
+// stream's loading screen is an overlay, above everything without focus.
 function focusApp() {
     var held = holdLoading ? loadingScreen() : null;
-    if (held) activate(held);
+    if (held && held.normalWindow) activate(held);
     else if (appWindow) activate(appWindow);
 }
 function onWindowAdded(w) {
@@ -290,7 +291,7 @@ var holdLoadingScreens = holdLoading;
 windowAdded.connect(function (w) {
     if (w && holdLoadingScreens && isLoadingScreen(w)) {
         holdLoading = true;
-        activate(w);
+        if (w.normalWindow) activate(w);
     }
 });
 windowRemoved.connect(function (w) {
@@ -339,11 +340,11 @@ LOADING_TITLE = "Quickscope Loading"
 LOADING_QML = """\
 import QtQuick
 import QtQuick.Window
-
+%(imports)s
 Window {
     title: %(title)s
     visible: true
-    visibility: Window.FullScreen
+%(placement)s
     color: "black"
 
     // No pointer over the loading screen.
@@ -397,6 +398,15 @@ Window {
             font.pixelSize: 26
             anchors.horizontalCenter: parent.horizontalCenter
         }
+        // The step under way, e.g. Moonlight's "Starting RTSP handshake…".
+        Text {
+            id: detail
+            text: ""
+            visible: text.length > 0
+            color: "#8a8f98"
+            font.pixelSize: 18
+            anchors.horizontalCenter: parent.horizontalCenter
+        }
         // The still version: an underline instead of the spinner, for a screen
         // that may stay frozen on display through the switch back.
         Rectangle {
@@ -409,7 +419,8 @@ Window {
         }
     }
 
-    // The launcher writes a new message here while it waits (e.g. for Wi-Fi).
+    // The launcher writes a new message here while it waits (e.g. for Wi-Fi),
+    // optionally with the step under way on a second line.
     Timer {
         interval: 200
         running: true
@@ -419,12 +430,28 @@ Window {
             xhr.open("GET", %(status_url)s, false);
             try {
                 xhr.send();
-                if (xhr.responseText.length > 0) message.text = xhr.responseText;
+                if (xhr.responseText.length > 0) {
+                    var lines = xhr.responseText.split("\\n");
+                    message.text = lines[0];
+                    detail.text = lines.length > 1 ? lines[1] : "";
+                }
             } catch (e) {}
         }
     }
 }
 """
+LOADING_WINDOW = "    visibility: Window.FullScreen"
+# Streams: an overlay like the OSD's, so no window can get in front of it.
+# Moonlight's own windows take focus while it connects, and a normal window
+# only stays in front for as long as KWin keeps it focused.
+LOADING_OVERLAY_IMPORTS = "import org.kde.layershell 1.0 as LayerShell"
+LOADING_OVERLAY = """\
+    LayerShell.Window.layer: LayerShell.Window.LayerOverlay
+    LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom
+                               | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
+    LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityNone
+    LayerShell.Window.exclusionZone: -1
+    LayerShell.Window.scope: "quickscope-loading\""""
 OSD_TITLE = "Quickscope OSD"
 # On-screen indicator for volume and brightness. Drawn as a layer-shell overlay
 # (QT_WAYLAND_SHELL_INTEGRATION=layer-shell) so it shows above fullscreen apps
@@ -1798,9 +1825,22 @@ def unquote_ini(value):
     return value
 
 
-# Moonlight's output while a `stream` launch connects.
-STREAM_CONNECTING = "Starting RTSP handshake"
+# Moonlight's output while a `stream` launch connects. The loading screen
+# shows the same steps Moonlight's own screen would.
+STREAM_HOST_FOUND = re.compile(r'Qt Info: ".*" is now online at')
+# Asking the host to start (or resume) the app, or to quit the one it's running.
+STREAM_REQUEST = re.compile(r'Executing request: "https?://[^/]+/(launch|resume|cancel)\?')
+# Connection steps, as Moonlight's screen shows them ("Starting RTSP handshake...").
+STREAM_STEP = re.compile(r"SDL Info \(\d+\): ((?:Initializing|Resolving|Starting) [\w ]+?)\.\.\.$")
+STREAM_LAST_STEP = "Starting input stream"
 STREAM_STARTED = re.compile(r"Video stream is \d+x\d+")
+# With another app running on the host, Moonlight asks whether to quit it
+# (nothing in its output says so). If it hasn't asked the host for the app
+# this long after finding it, step aside so its question can be seen.
+STREAM_QUESTION_WAIT = 3
+# The picture, about 0.7 s after the stream starts; until then Moonlight shows
+# its own loading screen (its last connection steps).
+STREAM_FIRST_VIDEO = "Received first video packet"
 STREAM_FAILED = re.compile(r"Qt Critical:")
 STREAM_TERMINATED = re.compile(r"Connection terminated: (-?\d+)")
 # Longest the loading screen waits for video before showing Moonlight anyway.
@@ -2347,12 +2387,13 @@ def load_session_script(force_fullscreen, loading, minimize_steam_windows=False,
     return False
 
 
-def show_loading_screen(message, still=False):
+def show_loading_screen(message, still=False, overlay=False):
     """A full-screen loading screen with `message`. Returns the process or None.
 
     `still` swaps the spinner for an underline: the returning screen can stay
     frozen on display after KWin exits (whether it does varies), and a spinner
-    stopped mid-turn would look like a hang."""
+    stopped mid-turn would look like a hang. An `overlay` stays above every
+    window, and only the launcher closes it (the KWin script can't)."""
     qml = shutil.which("qml6") or shutil.which("qml")
     if not qml:
         log("no qml runtime, skipping loading screen")
@@ -2363,9 +2404,13 @@ def show_loading_screen(message, still=False):
         "message": json.dumps(message),
         "status_url": json.dumps("file://" + LOADING_STATUS),
         "spinner": "false" if still else "true",
+        "imports": LOADING_OVERLAY_IMPORTS if overlay else "",
+        "placement": LOADING_OVERLAY if overlay else LOADING_WINDOW,
     }
     write_file(LOADING_SCREEN, screen)
     env = dict(os.environ, QML_XHR_ALLOW_FILE_READ="1")
+    if overlay:
+        env["QT_WAYLAND_SHELL_INTEGRATION"] = "layer-shell"
     try:
         return subprocess.Popen([qml, LOADING_SCREEN], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except OSError as e:
@@ -2405,25 +2450,52 @@ def steam_game_running(appid):
 
 def watch_stream(proc, hold, stream, started, on_drop=None):
     """Follow Moonlight's output during a `stream` launch: pass it through to
-    the journal, and keep the loading screen up until video starts.
+    the journal, and keep the loading screen up until the first video arrives.
 
     `on_drop(code, video)` hears about a connection that ended with Moonlight's
     termination code (None: a reconnect attempt that failed to connect) and
     whether video had started; it returns True if it reconnects, and the
     loading screen then stays for the next attempt."""
     host, app = stream.get("host", "the host"), stream.get("app", "").strip() or "the stream"
-    hold.status("stream", f"Connecting to {host}…")
+    connecting, starting = f"Connecting to {host}…", f"Starting {app}…"
+    hold.status("stream", connecting)
     timer = threading.Timer(STREAM_WAIT, hold.release, ["stream"])
     timer.daemon = True
     timer.start()
+    question = None
     video = dropping = False
+    step = None
+
+    def show_question():
+        log("Moonlight is waiting on a question (another app running on the host?), showing it")
+        hold.release("stream")
+
     for line in proc.stdout:
         sys.stdout.write(line)
         sys.stdout.flush()
-        if STREAM_CONNECTING in line:
-            hold.status("stream", f"Starting {app}…")
+        line = line.rstrip("\n")
+        if STREAM_HOST_FOUND.search(line):
+            hold.status("stream", f"{connecting}\nLoading app list…")
+            if question is None:
+                question = threading.Timer(STREAM_QUESTION_WAIT, show_question)
+                question.daemon = True
+                question.start()
+        elif request := STREAM_REQUEST.search(line):
+            if question:
+                question.cancel()
+            if request.group(1) == "cancel":
+                hold.status("stream", f"{connecting}\nQuitting the running app…")
+            else:
+                hold.status("stream", starting)
+        elif m := STREAM_STEP.search(line):
+            step = m.group(1)
+            hold.status("stream", f"{starting}\n{step}…")
+        elif step == STREAM_LAST_STEP and line.endswith("done"):
+            step = None
+            hold.status("stream", f"{starting}\nWaiting for video…")
         elif STREAM_STARTED.search(line):
             video = True
+        elif STREAM_FIRST_VIDEO in line:
             log(f"stream started {time.monotonic() - started:.1f}s after launch")
             hold.release("stream")
         elif terminated := STREAM_TERMINATED.search(line):
@@ -2436,6 +2508,8 @@ def watch_stream(proc, hold, stream, started, on_drop=None):
             log(f"stream failed: {line.strip()}")
             hold.release("stream")
     timer.cancel()
+    if question:
+        question.cancel()
     if not dropping:
         hold.release("stream")
 
@@ -2472,7 +2546,7 @@ class StreamReconnect:
         # Cover Moonlight's error before closing it (a drop before video still
         # has its loading screen up).
         if self.hold is None or "stream" not in self.hold.reasons:
-            self.hold = LoadingHold(show_loading_screen(f"Reconnecting to {self.host}…"), ["stream"])
+            self.hold = LoadingHold(show_loading_screen(f"Reconnecting to {self.host}…", overlay=True), ["stream"])
         threading.Thread(target=close_app, args=(self.proc,), daemon=True).start()
         return True
 
@@ -2796,7 +2870,9 @@ def launch():
     # Loading screen right away: KWin's Wayland socket exists as soon as its
     # service has started, before KWin answers on D-Bus.
     starting = f"Starting {pending.get('name') or 'game'}…"
-    loading = show_loading_screen(starting)
+    # A stream's is held until video and closed by the launcher: an overlay.
+    held_stream = bool(pending.get("stream")) and pending.get("mode") in ("direct", "hybrid")
+    loading = show_loading_screen(starting, overlay=held_stream)
 
     if wait_for_kwin():
         log(f"KWin ready after {time.monotonic() - started:.1f}s")
@@ -2807,7 +2883,7 @@ def launch():
         apply_display(pending["display"])
     if loading and loading.poll() is not None:
         log("loading screen exited early, starting it again")
-        loading = show_loading_screen(starting)
+        loading = show_loading_screen(starting, overlay=held_stream)
 
     # Network, before desktop Steam starts (and restarts NetworkManager): the
     # lock then takes effect on that reconnect.
@@ -2829,7 +2905,7 @@ def launch():
     hold_reasons = []
     if expect_restart or locked:
         hold_reasons.append("network")
-    if pending.get("stream") and pending.get("mode") in ("direct", "hybrid"):
+    if held_stream:
         hold_reasons.append("stream")
     hold = LoadingHold(loading, hold_reasons) if loading and hold_reasons else None
     hold_loading = hold is not None

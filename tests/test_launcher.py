@@ -1023,13 +1023,17 @@ class Volume(LauncherTestCase):
         self.assertIsNone(self.l.parse_volume("", "Mute: no"))
 
     def test_loading_qml_is_filled_in(self):
-        qml = self.l.LOADING_QML % {
-            "title": '"t"',
-            "message": '"Starting…"',
-            "status_url": '"file:///x"',
-            "spinner": "true",
+        fields = {"title": '"t"', "message": '"Starting…"', "status_url": '"file:///x"', "spinner": "true"}
+        overlay = self.l.LOADING_QML % {
+            **fields,
+            "imports": self.l.LOADING_OVERLAY_IMPORTS,
+            "placement": self.l.LOADING_OVERLAY,
         }
+        self.assertIn("LayerOverlay", overlay)
+        self.assertNotIn("Window.FullScreen", overlay)
+        qml = self.l.LOADING_QML % {**fields, "imports": "", "placement": self.l.LOADING_WINDOW}
         self.assertNotIn("%(", qml)
+        self.assertNotIn("LayerShell", qml)
         # Self-drawn spinner: nothing from the desktop theme.
         self.assertNotIn("QtQuick.Controls", qml)
 
@@ -1157,6 +1161,8 @@ class StreamLaunch(LauncherTestCase):
             real_release(reason)
 
         hold.release = release
+        # How many statuses had been shown when the loading screen was released.
+        self.released_at = released_at
 
         class Proc:
             stdout = iter(lines)
@@ -1167,15 +1173,57 @@ class StreamLaunch(LauncherTestCase):
         self.assertEqual(passed_through.getvalue(), "".join(lines))
         return statuses, closed
 
-    def test_watcher_hands_over_when_video_starts(self):
+    def test_watcher_shows_moonlights_steps_until_video_arrives(self):
         statuses, closed = self.run_watcher(
             [
-                "00:00:01 - SDL Info (0): Starting RTSP handshake...\n",
+                '00:00:00 - Qt Info: "star" is now online at "192.168.1.73:47989"\n',
+                '00:00:01 - Qt Info: Executing request: "https://192.168.1.73:47984/resume?uniqueid=1&appid=2"\n',
+                "00:00:02 - SDL Info (0): Starting RTSP handshake...\n",
+                "00:00:02 - SDL Info (0): done\n",
+                "00:00:02 - SDL Info (0): Starting video stream...\n",
                 "00:00:02 - SDL Info (0): Video stream is 1920x1200x60 (format 0x10000)\n",
+                "00:00:02 - SDL Info (0): done\n",
+                "00:00:02 - SDL Info (0): Starting input stream...\n",
+                "00:00:02 - SDL Info (0): done\n",
+                "00:00:03 - SDL Info (0): Received first video packet after 700 ms\n",
+                "00:00:04 - SDL Info (0): Starting audio stream...\n",
             ]
         )
-        self.assertEqual(statuses, ["Connecting to star…", "Starting Resume…"])
-        self.assertEqual(closed, ["loading"])
+        self.assertEqual(
+            statuses[:7],
+            [
+                "Connecting to star…",
+                "Connecting to star…\nLoading app list…",
+                "Starting Resume…",
+                "Starting Resume…\nStarting RTSP handshake…",
+                "Starting Resume…\nStarting video stream…",
+                "Starting Resume…\nStarting input stream…",
+                "Starting Resume…\nWaiting for video…",
+            ],
+        )
+        # Up until the first video, whatever comes after.
+        self.assertEqual((self.released_at, closed), ([7], ["loading"]))
+
+    def test_watcher_steps_aside_for_moonlights_question(self):
+        self.addCleanup(setattr, self.l, "STREAM_QUESTION_WAIT", self.l.STREAM_QUESTION_WAIT)
+        self.l.STREAM_QUESTION_WAIT = 0.05
+
+        class Output(list):
+            def __iter__(self):
+                for i, line in enumerate(list.__iter__(self)):
+                    if i == 1:
+                        time.sleep(0.2)  # Moonlight asking whether to quit the running app
+                    yield line
+
+        _, closed = self.run_watcher(
+            Output(
+                [
+                    '00:00:00 - Qt Info: "star" is now online at "192.168.1.73:47989"\n',
+                    '00:00:09 - Qt Info: Executing request: "https://192.168.1.73:47984/launch?appid=2"\n',
+                ]
+            )
+        )
+        self.assertEqual((self.released_at, closed), ([2], ["loading"]))
 
     def test_watcher_hands_over_on_failure(self):
         _, closed = self.run_watcher(["00:00:01 - Qt Critical: Network unreachable (Error 99)\n"])
@@ -1184,7 +1232,7 @@ class StreamLaunch(LauncherTestCase):
     def reconnect(self):
         """A StreamReconnect with the loading screen and closing Moonlight faked."""
         shown, closed_apps = [], []
-        self.l.show_loading_screen = lambda message, still=False: shown.append(message) or "reconnecting"
+        self.l.show_loading_screen = lambda message, still=False, overlay=False: shown.append(message) or "reconnecting"
         self.l.close_loading_screen = lambda proc: None
         self.l.close_app = closed_apps.append
         reconnect = self.l.StreamReconnect({"host": "star", "app": "Desktop"})
@@ -1251,7 +1299,7 @@ class StreamLaunch(LauncherTestCase):
         real_popen = subprocess.Popen
         self.addCleanup(setattr, subprocess, "Popen", real_popen)
         subprocess.Popen = popen
-        self.l.show_loading_screen = lambda message, still=False: "reconnecting"
+        self.l.show_loading_screen = lambda message, still=False, overlay=False: "reconnecting"
         self.l.close_loading_screen = lambda proc: None
         self.l.close_app = lambda p: setattr(p, "rc", -15)
         self.l.network_connected = lambda: True
