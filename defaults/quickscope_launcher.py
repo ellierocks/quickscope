@@ -2094,7 +2094,9 @@ def write_host_app(state, pending):
         "host": (pending.get("stream") or {}).get("host"),
         "conf": moonlight_conf(pending),
     }
-    write_file(HOST_APP, json.dumps(record))
+    # Whole or not at all: the session may be reading it right now.
+    write_file(HOST_APP + ".tmp", json.dumps(record))
+    os.replace(HOST_APP + ".tmp", HOST_APP)
 
 
 def start_host_app():
