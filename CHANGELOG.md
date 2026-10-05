@@ -2,6 +2,10 @@
 
 Releases before 1.0.0 were pre-releases, tested on a Steam Deck LCD.
 
+## 1.2.0
+
+- Stream entries stay up to date with the host: each time the panel opens, Quickscope asks your hosts for their current apps (through Moonlight itself, without opening it), so apps removed on the host disappear and new ones show up. Until now the list was whatever Moonlight's own window last saw. Apps hidden in Moonlight stay hidden, and a host that can't be reached keeps its last list.
+
 ## 1.1.0
 
 - Moonlight as an AppImage: with an AppImage added to Steam as the Moonlight shortcut, stream entries start that AppImage, and its settings are used for the Moonlight settings override.
